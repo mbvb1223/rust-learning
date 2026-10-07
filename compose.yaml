@@ -1,0 +1,17 @@
+services:
+  rust:
+    build: .
+    working_dir: /workspace
+    environment:
+      # Build output in a named volume: bind-mounted target/ dirs are very slow on macOS.
+      CARGO_TARGET_DIR: /cargo-target
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/cargo-target
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  cargo-target:
