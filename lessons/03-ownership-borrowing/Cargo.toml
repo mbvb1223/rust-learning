@@ -1,0 +1,10 @@
+[package]
+name = "ownership-borrowing"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[features]
+# Compiles Part A (src/broken.rs), which fails to build until you fix it.
+broken = []
