@@ -4,13 +4,14 @@ Build plain-text and CSV report formatters behind one trait, then share the code
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/09-traits-generics rust cargo test
-docker compose run --rm -w /workspace/lessons/09-traits-generics rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/09-traits-generics rust cargo clippy --all-targets -- -D warnings
-docker compose run --rm -w /workspace/lessons/09-traits-generics rust cargo run -- csv
+cd /workspace/lessons/09-traits-generics
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo run -- csv
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings (`with_row` also shows `unused mut`). Don't run `cargo fix`.

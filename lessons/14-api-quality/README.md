@@ -4,12 +4,18 @@ Finish the task API: implement every `todo!()` in `src/` and the two "your turn"
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/14-api-quality rust cargo test
-docker compose run --rm -w /workspace/lessons/14-api-quality rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/14-api-quality rust cargo clippy --all-targets -- -D warnings
+cd /workspace/lessons/14-api-quality
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+```
+
+The server needs a published port, and a shell opened with `docker compose exec` has none. Start it from the repository root on your Mac:
+
+```bash
 docker compose run --rm -p 3000:3000 -e BIND_ADDR=0.0.0.0:3000 -w /workspace/lessons/14-api-quality rust cargo run
 ```
 
@@ -122,7 +128,7 @@ tracing_subscriber::fmt().with_env_filter(filter).init();
 
 - When `signal` completes, the server stops accepting connections, lets in-flight requests finish, and returns. PHP-FPM's master process handles graceful stops and reloads for you. Here, your process is the server.
 - `tokio::signal::ctrl_c()` is a future. Waiting for SIGTERM needs `tokio::signal::unix::signal(SignalKind::terminate())` behind `#[cfg(unix)]`. `tokio::select!` waits for whichever comes first.
-- `docker stop` sends SIGTERM, waits 10 s, then sends SIGKILL. `cargo run` replaces itself with your program, so under `docker compose run` your server is PID 1. Linux ignores any signal sent to PID 1 that it has no handler for (SIGKILL aside), so without SIGTERM handling, `docker stop` always waits the full 10 s.
+- `docker stop` sends SIGTERM, waits 10 s, then sends SIGKILL. `compose.yaml` sets `init: true`, so a tiny init process is PID 1 and forwards SIGTERM to your server. Without a SIGTERM handler, the default action kills the server at once and drops in-flight requests. Without `init`, your server would be PID 1, and Linux ignores any signal sent to PID 1 that it has no handler for (SIGKILL aside), so `docker stop` would always wait the full 10 s.
 - `serve` takes the signal as a parameter, so `tests/shutdown.rs` can pass a channel instead of Ctrl+C. This is the same trick as `from_lookup`: inject what the OS normally provides.
 
 ### Integration tests with isolated databases

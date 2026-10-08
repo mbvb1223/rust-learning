@@ -4,14 +4,15 @@ Store tasks in SQLite so they survive restarts: implement every `todo!()` in `sr
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/13-sqlx rust cargo test
-docker compose run --rm -w /workspace/lessons/13-sqlx rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/13-sqlx rust cargo clippy --all-targets -- -D warnings
-docker compose run --rm -w /workspace/lessons/13-sqlx rust cargo run -- add "Buy milk"
-docker compose run --rm -w /workspace/lessons/13-sqlx rust cargo run -- list
+cd /workspace/lessons/13-sqlx
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo run -- add "Buy milk"
+cargo run -- list
 ```
 
 The first build compiles SQLite itself from C source, so it takes a while. `cargo run` keeps its data in `tasks.db` in this directory (git-ignored); delete the file to start over.

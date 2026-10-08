@@ -4,13 +4,14 @@ Hash files with SHA-256 sequentially and in parallel, prove the results are iden
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/17-parallelism rust cargo test
-docker compose run --rm -w /workspace/lessons/17-parallelism rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/17-parallelism rust cargo clippy --all-targets -- -D warnings
-docker compose run --rm -w /workspace/lessons/17-parallelism rust cargo run --release
+cd /workspace/lessons/17-parallelism
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo run --release
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`; it renames them to `_name`.
@@ -207,7 +208,7 @@ Then run `cargo run --release` (twice — results vary between runs) and `cargo 
 
 Optional extensions:
 
-- Restrict the process to 2 CPUs and watch `available_parallelism` and the tables change: `docker compose run --rm -w /workspace/lessons/17-parallelism rust taskset -c 0,1 cargo run --release`.
+- Restrict the process to 2 CPUs and watch `available_parallelism` and the tables change: `taskset -c 0,1 cargo run --release`.
 - Change `BUF_SIZE` to 4 KiB and to 1 MiB and measure the file tables. Explain the result.
 - Add `blake3` (without its `rayon` feature) and compare single-thread throughput with SHA-256 on the in-memory data.
 

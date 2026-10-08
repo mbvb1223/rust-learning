@@ -4,12 +4,13 @@ Build a money type and an order state machine: implement every `todo!()` in `src
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/02-structs-enums rust cargo test
-docker compose run --rm -w /workspace/lessons/02-structs-enums rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/02-structs-enums rust cargo clippy --all-targets -- -D warnings
+cd /workspace/lessons/02-structs-enums
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.

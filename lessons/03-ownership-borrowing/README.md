@@ -4,14 +4,15 @@ Fix seven borrow-checker errors in `src/broken.rs`, then build a shopping cart: 
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/03-ownership-borrowing rust cargo test
-docker compose run --rm -w /workspace/lessons/03-ownership-borrowing rust cargo check --features broken
-docker compose run --rm -w /workspace/lessons/03-ownership-borrowing rust cargo test --features broken
-docker compose run --rm -w /workspace/lessons/03-ownership-borrowing rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/03-ownership-borrowing rust cargo clippy --all-targets --features broken -- -D warnings
+cd /workspace/lessons/03-ownership-borrowing
+cargo test
+cargo check --features broken
+cargo test --features broken
+cargo fmt --check
+cargo clippy --all-targets --features broken -- -D warnings
 ```
 
 `src/broken.rs` is compiled only with `--features broken` (the `[features]` table in `Cargo.toml` plus `#[cfg(feature = "broken")]` in `lib.rs`). Plain `cargo test` runs Part B even while Part A doesn't compile.
@@ -121,7 +122,7 @@ Read it in this order:
 2. **`^^^` label**: where the refused operation happens.
 3. **`---` labels**: where the conflicting borrow or move started, and **"later used here"** — the use that keeps it alive. The fix almost always targets the span between those two labels: end the borrow sooner, don't take it, or take ownership instead.
 4. **`help:`** lines: often useful, not always right. In `record`, the suggested clone doesn't compile either.
-5. `rustc --explain E0502` prints a long explanation with examples: `docker compose run --rm rust rustc --explain E0502`.
+5. `rustc --explain E0502` prints a long explanation with examples.
 
 | Code | Meaning |
 |---|---|

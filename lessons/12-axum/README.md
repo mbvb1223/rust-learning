@@ -4,12 +4,18 @@ Build an in-memory task API: implement every `todo!()` in `src/lib.rs` until the
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/12-axum rust cargo test
-docker compose run --rm -w /workspace/lessons/12-axum rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/12-axum rust cargo clippy --all-targets -- -D warnings
+cd /workspace/lessons/12-axum
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+```
+
+The server needs a published port, and a shell opened with `docker compose exec` has none. Start it from the repository root on your Mac:
+
+```bash
 docker compose run --rm -p 3000:3000 -w /workspace/lessons/12-axum rust cargo run
 ```
 

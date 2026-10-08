@@ -4,13 +4,14 @@ Build a Markdown table-of-contents CLI as a library plus a thin binary: implemen
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/08-modules-testing rust cargo test
-docker compose run --rm -w /workspace/lessons/08-modules-testing rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/08-modules-testing rust cargo clippy --all-targets -- -D warnings
-docker compose run --rm -w /workspace/lessons/08-modules-testing rust cargo run -- README.md
+cd /workspace/lessons/08-modules-testing
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo run -- README.md
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings, and `MAX_LEVEL`, `is_fence`, and `taken` show dead-code warnings. Don't run `cargo fix`; it renames parameters to `_name`.
@@ -136,10 +137,15 @@ Arguments after `--` go to the test harness, not to Cargo. With this image's Car
 - Contents are Markdown. Conventional sections: `# Examples`, `# Errors`, `# Panics`.
 - Intra-doc links such as ``[`Slugger`]`` or ``[`crate::markdown::slug::Slugger`]`` become hyperlinks; broken ones are warnings.
 - `cargo doc --no-deps` documents this crate but not its dependencies. Add `--document-private-items` to include private items.
-- `cargo doc --open` can't open a browser from inside Docker. Write the HTML into the lesson folder (`target/` is gitignored) and open it from macOS:
+- `cargo doc --open` can't open a browser from inside Docker. Write the HTML into the lesson folder (`target/` is gitignored) from inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/08-modules-testing rust cargo doc --no-deps --target-dir target
+cargo doc --no-deps --target-dir target
+```
+
+Then open it from the repository root on your Mac:
+
+```bash
 open lessons/08-modules-testing/target/doc/modules_testing/index.html
 ```
 

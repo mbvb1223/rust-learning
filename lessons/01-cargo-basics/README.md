@@ -4,13 +4,21 @@ Build a temperature converter: implement every `todo!()` in `src/lib.rs` until t
 
 ## Run
 
-From the repository root:
+There's no Rust on the Mac; everything runs in the `rust` container. From the repository root, start it and open a shell:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/01-cargo-basics rust cargo test
-docker compose run --rm -w /workspace/lessons/01-cargo-basics rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/01-cargo-basics rust cargo clippy --all-targets -- -D warnings
-docker compose run --rm -w /workspace/lessons/01-cargo-basics rust cargo run
+docker compose up -d
+docker compose exec rust bash
+```
+
+Inside the container:
+
+```bash
+cd /workspace/lessons/01-cargo-basics
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo run
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`; it renames them to `_name`.

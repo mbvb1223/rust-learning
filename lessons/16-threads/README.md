@@ -4,14 +4,15 @@ Count lines and bytes in many files on several threads: implement every `todo!()
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/16-threads rust cargo test
-docker compose run --rm -w /workspace/lessons/16-threads rust cargo test --features broken
-docker compose run --rm -w /workspace/lessons/16-threads rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/16-threads rust cargo clippy --all-targets --features broken -- -D warnings
-docker compose run --rm -w /workspace/lessons/16-threads rust cargo run -- Cargo.toml README.md src missing.txt
+cd /workspace/lessons/16-threads
+cargo test
+cargo test --features broken
+cargo fmt --check
+cargo clippy --all-targets --features broken -- -D warnings
+cargo run -- Cargo.toml README.md src missing.txt
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.

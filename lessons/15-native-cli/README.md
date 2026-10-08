@@ -4,13 +4,14 @@ Build `native-cli`, a directory size scanner: implement every `todo!()` in `src/
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/15-native-cli rust cargo test
-docker compose run --rm -w /workspace/lessons/15-native-cli rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/15-native-cli rust cargo clippy --all-targets -- -D warnings
-docker compose run --rm -w /workspace/lessons/15-native-cli rust cargo run -- /workspace/lessons --top 5 --binary
+cd /workspace/lessons/15-native-cli
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo run -- /workspace/lessons --top 5 --binary
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.
@@ -18,7 +19,7 @@ Until a function is implemented, its parameters show `unused variable` warnings.
 Docker runs as root, and root ignores permission bits, so `an_unreadable_directory_is_recorded_and_the_scan_continues` returns early there. To exercise it, run the test binary as user `nobody` through a Cargo runner:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/15-native-cli rust cargo test \
+cargo test \
   --config 'target."cfg(unix)".runner = "setpriv --reuid=65534 --regid=65534 --clear-groups"' --lib unreadable
 ```
 
@@ -155,22 +156,24 @@ reader.consume(n);              // …before this call, which needs `reader` mut
 In Docker, `CARGO_TARGET_DIR=/cargo-target`, so binaries are written to the `cargo-target` volume, not under the lesson directory:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/15-native-cli rust sh -c \
-  'cargo build --release && ls -lh /cargo-target/release/native-cli && /cargo-target/release/native-cli /workspace --top 3'
+cargo build --release
+ls -lh /cargo-target/release/native-cli
+/cargo-target/release/native-cli /workspace --top 3
 ```
 
 That one file is the whole program. Another machine needs no `php` binary, extensions, or `vendor/`, only the same OS, the same CPU architecture, and a compatible libc. Docker builds a **Linux ELF** binary for the container's architecture (`aarch64-unknown-linux-gnu` on Apple Silicon; `rustc -vV` shows it as `host:`). macOS refuses to run it with `exec format error`. For a macOS (Mach-O) binary, install rustup on the Mac and run the same `cargo build --release` natively.
 
 ```bash
-docker compose run --rm -w /workspace/lessons/15-native-cli rust sh -c \
-  'rustup target add aarch64-unknown-linux-musl && cargo build --release --target aarch64-unknown-linux-musl && ldd /cargo-target/aarch64-unknown-linux-musl/release/native-cli'
+rustup target add aarch64-unknown-linux-musl
+cargo build --release --target aarch64-unknown-linux-musl
+ldd /cargo-target/aarch64-unknown-linux-musl/release/native-cli
 ```
 
 `--target` writes to `<target-dir>/<triple>/release/`. `ldd` prints `not a dynamic executable`: the musl binary is static. On an Intel Mac the container is x86_64, so use `x86_64-unknown-linux-musl` instead.
 
 - A target triple is `arch-vendor-os[-env]`. `-gnu` binaries link glibc dynamically, so they need a compatible glibc where they run. `-musl` binaries are statically linked.
 - `rustup target add` installs only the target's standard library. Linking for another CPU or OS also needs a linker for that target: building `x86_64-unknown-linux-musl` in the arm64 container fails with a `cc` error. `cross` (prepared build containers) or `cargo-zigbuild` (Zig as the linker) solve this for Linux targets. Apple targets need the macOS SDK, so build those on a Mac.
-- With `docker compose run --rm`, a target added by `rustup` disappears when the container exits, so the command above runs everything in one `sh -c`.
+- A target added by `rustup` lives in the container, not the image, so it's gone after `docker compose down`. Add it again in the new container.
 
 Size and speed settings in `Cargo.toml`:
 

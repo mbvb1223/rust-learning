@@ -4,12 +4,13 @@ Count word frequencies and rank the top N, first with loops, then with iterators
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/06-collections rust cargo test
-docker compose run --rm -w /workspace/lessons/06-collections rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/06-collections rust cargo clippy --all-targets -- -D warnings
+cd /workspace/lessons/06-collections
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.

@@ -4,12 +4,13 @@ Parse task API request bodies into validated types and serialize responses: add 
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/10-serde rust cargo test
-docker compose run --rm -w /workspace/lessons/10-serde rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/10-serde rust cargo clippy --all-targets -- -D warnings
+cd /workspace/lessons/10-serde
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.

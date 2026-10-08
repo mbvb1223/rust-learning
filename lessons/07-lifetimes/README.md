@@ -4,13 +4,14 @@ Return slices borrowed from the input instead of copies: implement every `todo!(
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/07-lifetimes rust cargo test
-docker compose run --rm -w /workspace/lessons/07-lifetimes rust cargo test --features broken
-docker compose run --rm -w /workspace/lessons/07-lifetimes rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/07-lifetimes rust cargo clippy --all-targets --features broken -- -D warnings
+cd /workspace/lessons/07-lifetimes
+cargo test
+cargo test --features broken
+cargo fmt --check
+cargo clippy --all-targets --features broken -- -D warnings
 ```
 
 `src/broken.rs` is compiled only with `--features broken` (`[features] broken = []` in `Cargo.toml`, `#[cfg(feature = "broken")]` in `lib.rs`), so plain `cargo test` works while it is still broken.

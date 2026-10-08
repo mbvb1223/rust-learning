@@ -4,12 +4,13 @@ Build text and slice helpers that survive empty input and non-ASCII text: implem
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/04-strings-slices rust cargo test
-docker compose run --rm -w /workspace/lessons/04-strings-slices rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/04-strings-slices rust cargo clippy --all-targets -- -D warnings
+cd /workspace/lessons/04-strings-slices
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.

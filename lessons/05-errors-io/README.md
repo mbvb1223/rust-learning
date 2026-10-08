@@ -4,15 +4,16 @@ Build a `wc`-style CLI that counts a text file and reports missing files, invali
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/05-errors-io rust cargo test
-docker compose run --rm -w /workspace/lessons/05-errors-io rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/05-errors-io rust cargo clippy --all-targets -- -D warnings
-docker compose run --rm -w /workspace/lessons/05-errors-io rust cargo run -q -- tests/fixtures/sample.txt
-docker compose run --rm -w /workspace/lessons/05-errors-io rust cargo run -q -- --max-width 40 tests/fixtures/sample.txt
-docker compose run --rm -w /workspace/lessons/05-errors-io rust cargo run -q -- missing.txt; echo "exit code: $?"
+cd /workspace/lessons/05-errors-io
+cargo test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo run -q -- tests/fixtures/sample.txt
+cargo run -q -- --max-width 40 tests/fixtures/sample.txt
+cargo run -q -- missing.txt; echo "exit code: $?"
 ```
 
 Arguments after `--` go to your program, not to Cargo. `-q` hides Cargo's own output.

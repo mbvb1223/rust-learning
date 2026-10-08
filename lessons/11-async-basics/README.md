@@ -4,14 +4,15 @@ Run timers one after another, concurrently, and as spawned tasks: implement ever
 
 ## Run
 
-From the repository root:
+Inside the container:
 
 ```bash
-docker compose run --rm -w /workspace/lessons/11-async-basics rust cargo test
-docker compose run --rm -w /workspace/lessons/11-async-basics rust cargo test --features broken
-docker compose run --rm -w /workspace/lessons/11-async-basics rust cargo fmt --check
-docker compose run --rm -w /workspace/lessons/11-async-basics rust cargo clippy --all-targets --all-features -- -D warnings
-docker compose run --rm -w /workspace/lessons/11-async-basics rust cargo run
+cd /workspace/lessons/11-async-basics
+cargo test
+cargo test --features broken
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo run
 ```
 
 Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`; it renames them to `_name`.
