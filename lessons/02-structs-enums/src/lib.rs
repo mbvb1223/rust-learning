@@ -10,12 +10,19 @@ pub enum Currency {
 impl Currency {
     /// ISO code: `"EUR"`, `"USD"`, `"JPY"`.
     pub fn code(self) -> &'static str {
-        todo!()
+        match self {
+            Currency::Eur => "EUR",
+            Currency::Usd => "USD",
+            Currency::Jpy => "JPY",
+        }
     }
 
     /// Digits after the decimal point: 2 for EUR and USD, 0 for JPY.
     pub fn decimals(self) -> u32 {
-        todo!()
+        match self {
+            Currency::Eur | Currency::Usd => 2,
+            Currency::Jpy => 0,
+        }
     }
 }
 
@@ -28,7 +35,7 @@ pub struct Money {
 
 impl Money {
     pub fn new(minor: i64, currency: Currency) -> Self {
-        todo!()
+        Self { minor, currency }
     }
 
     /// `12` EUR → 1200 minor units; `12` JPY → 12. `None` on overflow.
@@ -37,11 +44,11 @@ impl Money {
     }
 
     pub fn minor(&self) -> i64 {
-        todo!()
+        self.minor
     }
 
     pub fn currency(&self) -> Currency {
-        todo!()
+        self.currency
     }
 
     /// `None` if the currencies differ or the result overflows.

@@ -33,7 +33,7 @@ Goal: understand how data moves through a Rust program and build a useful small 
 | # | Lesson / folder | Key topics | Exercise | Status |
 |---|---|---|---|---|
 | 01 | Cargo and basic syntax — `01-cargo-basics` | Cargo, `Cargo.toml`, `fn`, scalar types, type inference, `let`/`mut`, shadowing, expressions, `if`, loops, basic `#[test]` assertions | Temperature converter with tests | ✅ |
-| 02 | Model data — `02-structs-enums` | `struct`, `impl`, associated functions, enums with data, exhaustive `match`, `if let`, `let else`, `Option<T>`, `Debug` and `PartialEq` derives | Order states and a money type using integer minor units | ⬜ |
+| 02 | Model data — `02-structs-enums` | `struct`, `impl`, associated functions, enums with data, exhaustive `match`, `if let`, `let else`, `Option<T>`, `Debug` and `PartialEq` derives | Order states and a money type using integer minor units | 🟡 |
 | 03 | Ownership and borrowing — `03-ownership-borrowing` | Moves, `Copy`/`Clone`, stack and heap basics, scope and cleanup, `&T`/`&mut T`, borrow-checker diagnostics | Fix ownership errors and implement shopping-cart mutations; explain each fix | ⬜ |
 | 04 | Strings and slices — `04-strings-slices` | `String`/`&str`, `&[T]`, UTF-8, bytes versus `char`, borrowed function parameters | Text helpers with empty-input and Unicode tests | ⬜ |
 | 05 | Errors and file I/O — `05-errors-io` | `Result<T, E>`, `?`, `match`, recoverable failures versus panics, `std::fs`, `std::io`, command-line arguments | Read a text file and report missing-file or invalid-input errors | ⬜ |
