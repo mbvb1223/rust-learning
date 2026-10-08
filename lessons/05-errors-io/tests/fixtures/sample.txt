@@ -1,0 +1,4 @@
+Rust has no exceptions.
+Errors are values: Result<T, E> is either Ok or Err.
+Crème brûlée is UTF-8 text, so chars and bytes differ.
+This line is deliberately long, so it goes past the default limit of eighty characters.
