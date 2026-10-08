@@ -1,0 +1,12 @@
+[package]
+name = "threads"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+broken = []
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3.27.0"
