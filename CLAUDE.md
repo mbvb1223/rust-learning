@@ -34,6 +34,7 @@ Each `lessons/NN-slug/` is a standalone crate (no Cargo workspace), edition 2024
 - `src/lib.rs`: exercises as `todo!()` stubs; the doc comment on each stub is its spec. Unit tests live alongside. `src/main.rs` is a thin binary over the library.
 - `tests/`: integration tests and fixtures; shared helpers go in `tests/common/mod.rs`.
 - `README.md`: always `## Run` → `## Notes` → `## Exercise` (ordered steps) → `## Done when` (passing checks plus "You can explain" questions).
+- README commands assume a shell inside the container (`docker compose exec rust bash`): `cd /workspace/lessons/NN-slug`, then plain `cargo …`. Only server runs (12, 14) show the host-side `docker compose run --rm -p` command.
 - `broken` feature (03, 07, 11, 16): `src/broken.rs` is a deliberate compile-error exercise, gated by `#[cfg(feature = "broken")]` so plain `cargo test` still builds. Check it with `--features broken`.
 - Unused-parameter warnings on unimplemented stubs are expected. Never run `cargo fix` (it renames params to `_name`).
 
