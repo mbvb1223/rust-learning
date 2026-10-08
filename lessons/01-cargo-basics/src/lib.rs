@@ -2,38 +2,60 @@
 
 /// `F = C × 9/5 + 32`
 pub fn celsius_to_fahrenheit(celsius: f64) -> f64 {
-    todo!()
+    celsius * 9.0 / 5.0 + 32.0
 }
 
 /// `C = (F − 32) × 5/9`
 pub fn fahrenheit_to_celsius(fahrenheit: f64) -> f64 {
-    todo!()
+    (fahrenheit - 32.0) * 5.0 / 9.0
 }
 
 /// Integer-only conversion. Integer division truncates toward zero, so `37` → `98`.
 pub fn celsius_to_fahrenheit_whole(celsius: i32) -> i32 {
-    todo!()
+    celsius * 9 / 5 + 32
 }
 
 /// Rounds half away from zero, like PHP's `round($value, $decimals)`.
 /// Negative `decimals` round to tens, hundreds, …
 pub fn round_to(value: f64, decimals: i32) -> f64 {
-    todo!()
+    let factor = 10f64.powi(decimals);
+    let value = (value * factor).round();
+    value / factor
 }
 
 /// `"freezing"` at or below 0 °C, `"cold"` below 15, `"mild"` below 25, otherwise `"hot"`.
 pub fn describe(celsius: f64) -> &'static str {
-    todo!()
+    if celsius <= 0.0 {
+        "freezing"
+    } else if celsius < 15.0 {
+        "cold"
+    } else if celsius < 25.0 {
+        "mild"
+    } else {
+        "hot"
+    }
 }
 
 /// Average Fahrenheit value of every whole Celsius degree in `from..=to`. Assumes `from <= to`.
 pub fn average_fahrenheit(from: i32, to: i32) -> f64 {
-    todo!()
+    let mut sum = 0.0;
+    let mut count = 0;
+    for celsius in from..=to {
+        sum += celsius_to_fahrenheit(f64::from(celsius));
+        count += 1;
+    }
+    sum / f64::from(count)
 }
 
 /// Counting up from `start`, the first whole Celsius degree whose Fahrenheit value is at least `threshold`.
 pub fn first_celsius_reaching(start: i32, threshold: f64) -> i32 {
-    todo!()
+    let mut celsius = start;
+    loop {
+        if celsius_to_fahrenheit(f64::from(celsius)) >= threshold {
+            break celsius;
+        }
+        celsius += 1;
+    }
 }
 
 #[cfg(test)]
