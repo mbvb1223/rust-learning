@@ -23,6 +23,7 @@ docker compose run --rm -w /workspace/lessons/NN-slug rust cargo test --lib     
 
 - `cargo test` stops at the first failing test binary; use `--no-fail-fast` or `--test <file>` to see integration tests while unit tests still fail.
 - `CARGO_TARGET_DIR=/cargo-target` is a named volume (bind-mounted `target/` is slow on macOS), so there's no `target/` in lesson dirs.
+- The service runs `sleep infinity`, so after `docker compose up -d` the same commands also work as `docker compose exec -w … rust cargo …`. `exec` can't publish ports, so servers still use `run --rm -p`.
 - Servers (12, 14) need `-p 3000:3000`; lesson 14 also needs `-e BIND_ADDR=0.0.0.0:3000`.
 - Docker builds Linux binaries; they don't run on macOS.
 

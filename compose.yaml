@@ -1,6 +1,8 @@
 services:
   rust:
     build: .
+    command: sleep infinity
+    init: true
     working_dir: /workspace
     environment:
       # Build output in a named volume: bind-mounted target/ dirs are very slow on macOS.
