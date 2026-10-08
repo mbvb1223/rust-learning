@@ -22,7 +22,7 @@ PHP can already build CLI tools, network services, and background workers. The l
 
 Use the stable Rust toolchain and edition 2024 for new crates. Commit application `Cargo.lock` files. Introduce dependencies when an exercise needs them.
 
-Once a lesson is scaffolded, the existing Docker setup can test it from the repository root with `docker compose run --rm rust cargo test --manifest-path lessons/01-cargo-basics/Cargo.toml`. Adjust the lesson path and Cargo subcommand as needed. Docker builds Linux programs; use a native toolchain when a later project needs macOS integration or desktop/hardware tooling.
+Run Cargo inside the container: `docker compose up -d`, then `docker compose exec rust bash`, then `cd /workspace/lessons/01-cargo-basics && cargo test`. Adjust the lesson path and Cargo subcommand as needed. Docker builds Linux programs; use a native toolchain when a later project needs macOS integration or desktop/hardware tooling.
 
 Status: ⬜ todo · 🟡 in progress · ✅ done
 
@@ -32,7 +32,7 @@ Goal: understand how data moves through a Rust program and build a useful small 
 
 | # | Lesson / folder | Key topics | Exercise | Status |
 |---|---|---|---|---|
-| 01 | Cargo and basic syntax — `01-cargo-basics` | Cargo, `Cargo.toml`, `fn`, scalar types, type inference, `let`/`mut`, shadowing, expressions, `if`, loops, basic `#[test]` assertions | Temperature converter with tests | ⬜ |
+| 01 | Cargo and basic syntax — `01-cargo-basics` | Cargo, `Cargo.toml`, `fn`, scalar types, type inference, `let`/`mut`, shadowing, expressions, `if`, loops, basic `#[test]` assertions | Temperature converter with tests | ✅ |
 | 02 | Model data — `02-structs-enums` | `struct`, `impl`, associated functions, enums with data, exhaustive `match`, `if let`, `let else`, `Option<T>`, `Debug` and `PartialEq` derives | Order states and a money type using integer minor units | ⬜ |
 | 03 | Ownership and borrowing — `03-ownership-borrowing` | Moves, `Copy`/`Clone`, stack and heap basics, scope and cleanup, `&T`/`&mut T`, borrow-checker diagnostics | Fix ownership errors and implement shopping-cart mutations; explain each fix | ⬜ |
 | 04 | Strings and slices — `04-strings-slices` | `String`/`&str`, `&[T]`, UTF-8, bytes versus `char`, borrowed function parameters | Text helpers with empty-input and Unicode tests | ⬜ |
