@@ -40,7 +40,8 @@ impl Money {
 
     /// `12` EUR → 1200 minor units; `12` JPY → 12. `None` on overflow.
     pub fn from_major(major: i64, currency: Currency) -> Option<Self> {
-        todo!()
+        let minor = major.checked_mul(10_i64.pow(currency.decimals()))?;
+        Some(Self::new(minor, currency))
     }
 
     pub fn minor(&self) -> i64 {
@@ -53,17 +54,40 @@ impl Money {
 
     /// `None` if the currencies differ or the result overflows.
     pub fn checked_add(self, other: Money) -> Option<Money> {
-        todo!()
+        if self.currency != other.currency {
+            return None;
+        }
+        let minor = self.minor.checked_add(other.minor)?;
+        Some(Money::new(minor, self.currency))
     }
 
     /// `None` if the currencies differ or the result overflows.
     pub fn checked_sub(self, other: Money) -> Option<Money> {
-        todo!()
+        if self.currency != other.currency {
+            return None;
+        }
+        let minor = self.minor.checked_sub(other.minor)?;
+        Some(Money::new(minor, self.currency))
     }
 
     /// `"12.50 EUR"`, `"-0.05 EUR"`, `"1250 JPY"`.
     pub fn format(&self) -> String {
-        todo!()
+        let code = self.currency.code();
+        let decimals = self.currency.decimals();
+        if decimals == 0 {
+            return format!("{} {code}", self.minor);
+        }
+
+        // Sign comes from `minor`, not the major part: -5 cents has major part 0, and "-0" isn't an i64.
+        let sign = if self.minor < 0 { "-" } else { "" };
+        let abs = self.minor.unsigned_abs();
+        let unit = 10_u64.pow(decimals);
+        format!(
+            "{sign}{}.{:0width$} {code}",
+            abs / unit,
+            abs % unit,
+            width = decimals as usize
+        )
     }
 }
 
@@ -88,43 +112,78 @@ pub enum OrderState {
 impl OrderState {
     /// Only from `Pending`, and only with a positive amount.
     pub fn pay(self, amount: Money) -> Option<OrderState> {
-        todo!()
+        match self {
+            OrderState::Pending if amount.minor() > 0 => Some(OrderState::Paid { amount }),
+            _ => None,
+        }
     }
 
     /// Only from `Paid`.
     pub fn ship(self, tracking: u64) -> Option<OrderState> {
-        todo!()
+        match self {
+            OrderState::Paid { amount } => Some(OrderState::Shipped { amount, tracking }),
+            _ => None,
+        }
     }
 
     /// Only from `Shipped`.
     pub fn deliver(self) -> Option<OrderState> {
-        todo!()
+        match self {
+            OrderState::Shipped { amount, .. } => Some(OrderState::Delivered { amount }),
+            _ => None,
+        }
     }
 
     /// Only from `Pending` or `Paid`.
     pub fn cancel(self, reason: CancelReason) -> Option<OrderState> {
-        todo!()
+        match self {
+            OrderState::Pending | OrderState::Paid { .. } => Some(OrderState::Cancelled { reason }),
+            _ => None,
+        }
     }
 
     /// The paid amount, for any state that has one.
     pub fn amount(self) -> Option<Money> {
-        todo!()
+        match self {
+            OrderState::Paid { amount }
+            | OrderState::Shipped { amount, .. }
+            | OrderState::Delivered { amount } => Some(amount),
+            OrderState::Pending | OrderState::Cancelled { .. } => None,
+        }
     }
 
     /// The tracking number, only while `Shipped`.
     pub fn tracking(self) -> Option<u64> {
-        todo!()
+        if let OrderState::Shipped { tracking, .. } = self {
+            Some(tracking)
+        } else {
+            None
+        }
     }
 
     /// `"pending"`, `"paid"`, `"shipped"`, `"delivered"`, `"cancelled"`.
     pub fn label(self) -> &'static str {
-        todo!()
+        match self {
+            OrderState::Pending => "pending",
+            OrderState::Paid { .. } => "paid",
+            OrderState::Shipped { .. } => "shipped",
+            OrderState::Delivered { .. } => "delivered",
+            OrderState::Cancelled { .. } => "cancelled",
+        }
     }
 
     /// Refund for a `Paid` order minus `fee`.
     /// `None` if the order isn't `Paid`, the currencies differ, or the fee exceeds the amount.
     pub fn refund(self, fee: Money) -> Option<Money> {
-        todo!()
+        let OrderState::Paid { amount } = self else {
+            return None;
+        };
+        let refund = amount.checked_sub(fee)?;
+        if refund.minor() < 0 {
+            None
+        } else {
+            Some(refund)
+        }
     }
 }
 
