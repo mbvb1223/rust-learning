@@ -4,7 +4,7 @@
 //! doc-comment contract. A signature may change when that is the right fix; the tests may not.
 
 /// Returns the numbers sorted ascending: `[3, 1, 2]` → `[1, 2, 3]`.
-pub fn sorted(numbers: Vec<i32>) -> Vec<i32> {
+pub fn sorted(mut numbers: Vec<i32>) -> Vec<i32> {
     numbers.sort();
     numbers
 }
@@ -13,7 +13,7 @@ pub fn sorted(numbers: Vec<i32>) -> Vec<i32> {
 /// `["ada", "bob"]` → `(["ADA", "BOB"], 2)`.
 pub fn shout_all(names: Vec<String>) -> (Vec<String>, usize) {
     let mut shouted = Vec::new();
-    for name in names {
+    for name in &names {
         shouted.push(name.to_uppercase());
     }
     (shouted, names.len())
@@ -25,39 +25,37 @@ pub struct Customer {
 }
 
 /// The customer's name. The caller keeps `customer` and can still use it afterwards.
-pub fn customer_name(customer: &Customer) -> String {
-    customer.name
+pub fn customer_name(customer: &Customer) -> &str {
+    &customer.name
 }
 
 /// Trims surrounding whitespace and lowercases: `"  Ada LOVELACE "` → `"ada lovelace"`.
-pub fn normalize(name: &str) -> &str {
-    let normalized = name.trim().to_lowercase();
-    &normalized
+pub fn normalize(name: &str) -> String {
+    name.trim().to_lowercase()
 }
 
 /// Appends `entry` to the end of `log` and returns the number of characters (not bytes) in
 /// `entry`: `"héllo"` → 5.
 pub fn record(log: &mut Vec<String>, entry: String) -> usize {
-    let text = entry.as_str();
+    let chars = entry.chars().count();
     log.push(entry);
-    text.chars().count()
+    chars
 }
 
 /// Appends a doubled copy of every number after the originals:
 /// `[1, 2, 3]` → `[1, 2, 3, 2, 4, 6]`. An empty vector stays empty.
 pub fn append_doubles(numbers: &mut Vec<i32>) {
-    for n in numbers.iter() {
-        numbers.push(n * 2);
+    let len = numbers.len();
+    for i in 0..len {
+        numbers.push(numbers[i] * 2);
     }
 }
 
 /// Moves `amount` from `balances[from]` to `balances[to]`.
 /// `from == to` leaves every balance unchanged. Panics if either index is out of bounds.
 pub fn transfer(balances: &mut [i64], from: usize, to: usize, amount: i64) {
-    let source = &mut balances[from];
-    let target = &mut balances[to];
-    *source -= amount;
-    *target += amount;
+    balances[from] -= amount;
+    balances[to] += amount;
 }
 
 #[cfg(test)]
