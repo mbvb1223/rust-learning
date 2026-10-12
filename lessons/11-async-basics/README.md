@@ -1,6 +1,6 @@
 # Lesson 11 — Enough async to start
 
-Run timers one after another, concurrently, and as spawned tasks: implement every `todo!()` in `src/lib.rs` until the tests pass, then fix the spawn errors in `src/broken.rs`.
+Run timers one after another, concurrently, and as spawned tasks in `src/lib.rs`, then fix the spawn errors in `src/broken.rs`.
 
 ## Run
 
@@ -15,127 +15,154 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo run
 ```
 
-Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`; it renames them to `_name`.
-
-`--features broken` (and `--all-features`) also compiles `src/broken.rs`, which fails on purpose until you fix it in step 11.
+`src/broken.rs` only compiles with `--features broken` (or `--all-features`), so plain `cargo test` works while it's still broken. Don't run `cargo fix`.
 
 ## Notes
 
-### The runtime is a library
+### Async needs a runtime
 
-PHP-FPM gives each request its own process, so a blocking MySQL query or `sleep()` stalls only that request. Concurrency inside one PHP process needs an add-on: Fibers (PHP 8.1) can suspend a function, but an event loop has to resume them: Revolt, used by Amp and by ReactPHP's `react/async`. The Swoole extension replaces both with its own coroutines and scheduler.
-
-Rust splits it the same way: `async`/`await` and the `Future` trait are part of the language; the runtime that drives futures is a crate. Tokio is the usual choice, and Axum and SQLx (lessons 12–13) run on it.
-
-| Rust | Closest PHP | Where the comparison breaks down |
-|---|---|---|
-| `async fn` returns a `Future` | Amp `Future`, React promise | A Rust future is **lazy**: nothing runs until it is awaited or spawned. Amp's `async()` and React promises have already started |
-| `.await` | `$future->await()` (Amp), `React\Async\await()` | Fibers are stackful. A Rust future is a compiler-generated state machine with a size fixed at compile time |
-| `tokio::join!(a, b)` | `Amp\Future\await([$a, $b])`, `React\Promise\all()` | — |
-| `tokio::spawn(future)` | `Amp\async($fn)`, Swoole `go($fn)` | The task may run on another thread, in parallel |
-| Tokio runtime | Revolt loop, Swoole scheduler | Multi-threaded by default; a PHP event loop runs on one thread |
-
-### Futures are lazy
+`async` and `.await` are part of the language, but the runtime that runs async code is a crate. This course uses Tokio; Axum and SQLx run on it.
 
 ```rust
-async fn timer(name: &str, ms: u64) -> TimerReport { … }
-// roughly: fn timer<'a>(name: &'a str, ms: u64) -> impl Future<Output = TimerReport> + 'a
-
-let future = timer("a", 100);           // builds a state machine: no clock read, no sleep
-sleep(Duration::from_millis(50)).await;
-let report = future.await;              // the body starts now: started_at is +50 ms
-```
-
-- `.await` polls the future. When it can't finish yet (a timer, a socket), it returns `Pending`, and the runtime runs other tasks on that thread until it is woken.
-- `.await` only works inside `async` code. `#[tokio::main]` makes `main` async.
-- An un-awaited future triggers a warning: "futures do nothing unless you `.await` or poll them". Treat it as a bug.
-- The future from `timer(name, …)` **borrows** `name` (the `+ 'a`). That matters when you spawn it.
-
-### The runtime
-
-```rust
-#[tokio::main]                        // builds a multi-thread runtime; main's body runs on the main thread via block_on, spawned tasks on worker threads
-async fn main() { … }
-
-#[tokio::test]                        // a fresh single-thread runtime per test
-#[tokio::test(start_paused = true)]   // the same, with a virtual clock
-```
-
-| Tokio feature | Gives you |
-|---|---|
-| `rt-multi-thread` | The multi-thread scheduler: one worker thread per CPU core by default |
-| `macros` | `#[tokio::main]`, `#[tokio::test]`, `join!`, `select!` |
-| `time` | `sleep`, `timeout`, `Instant` |
-| `test-util` (dev-dependency) | `start_paused`, `tokio::time::advance` |
-
-Tokio's features are opt-in, and `full` enables almost all of them. This crate lists only what it uses.
-
-With `start_paused = true` the clock is frozen. When every task is waiting, Tokio jumps it to the next timer, so a 300 ms test finishes instantly with exact timings. Only Tokio's clock is virtual: use `tokio::time::Instant`, not `std::time::Instant`.
-
-### Await, join, or spawn
-
-Two timers, `a` = 100 ms and `b` = 200 ms:
-
-| | Code | `a` runs | `b` runs | Total |
-|---|---|---|---|---|
-| Sequential | `let a = fa.await; let b = fb.await;` | 0–100 | 100–300 | 300 ms |
-| Concurrent | `let (a, b) = tokio::join!(fa, fb);` | 0–100 | 0–200 | 200 ms |
-| Spawned | `tokio::spawn` both, then await both handles | 0–100 | 0–200 | 200 ms |
-
-- `join!` is concurrency without parallelism: one task polls both futures in turn and switches at each `.await`. That's enough when the work is waiting on I/O or timers.
-- `spawn` hands the future to the runtime, which starts it without waiting for an `.await`. On `rt-multi-thread`, spawned tasks can run in parallel on different worker threads.
-- `spawn` returns a `JoinHandle<T>`. Awaiting it gives `Result<T, JoinError>`, which is `Err` when the task panicked or was aborted.
-- Dropping a `JoinHandle` detaches the task: it keeps running until it finishes or the runtime shuts down (e.g. `main` returns), which drops it at its next `.await`. Lesson 14 covers graceful shutdown. Dropping a future that isn't spawned cancels it (see below).
-
-### `spawn` needs `Send + 'static`
-
-```rust
-pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-```
-
-- **`'static`**: the task can outlive the function that spawned it, so it can't borrow that function's locals or parameters. Give it owned data — `to_owned()`, `clone()`, or an `Arc` — and capture it with `async move`.
-- **`Send`**: a multi-thread runtime can resume a task on a different worker thread after any `.await`, so every value held across an `.await` must be `Send`. `Rc` isn't, because its reference count isn't atomic; `Arc` is. A `std::sync::MutexGuard` isn't either — lesson 12.
-- Both are compile errors. The single-thread runtime in `#[tokio::test]` doesn't relax them, because they're part of `spawn`'s signature.
-
-```rust
-let name = name.to_owned();               // an owned String: no borrow of the caller
-let handle = tokio::spawn(async move {    // `move`: the block takes ownership of `name`
-    timer(&name, 100).await
-});
-let report = handle.await?;               // JoinError if the task panicked
-```
-
-`async move` works like a `move` closure: without `move`, the block borrows what it uses.
-
-PHP's reference counting isn't atomic either, but PHP never shares an object between threads: FPM uses processes, and `ext-parallel` copies values into each thread. Rust lets threads share memory and checks that sharing at compile time.
-
-### Cancellation is dropping
-
-```rust
-match tokio::time::timeout(Duration::from_millis(100), timer("slow", 300)).await {
-    Ok(report) => …,
-    Err(_elapsed) => …,   // the deadline won; the timer future was dropped mid-sleep
+#[tokio::main]
+async fn main() {
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    println!("done"); // done (after 100 ms)
 }
 ```
 
-A future only makes progress when it is polled, so dropping it stops it at its current `.await`, and the code after that point never runs. `timeout` and `select!` cancel this way. Amp instead passes a `Cancellation` object that your code must check. In Rust, any future can be cancelled at any `.await` without its cooperation.
+`#[tokio::main]` starts the runtime and makes `main` async. `.await` only works inside `async` code. Tokio plays the role of Amp's or ReactPHP's event loop, but uses several threads.
 
-### Blocking inside async code
+### Futures are lazy
+
+Calling an `async fn` doesn't run it. It returns a **future**, and the body starts only when you `.await` it.
 
 ```rust
-async fn bad(ms: u64) { std::thread::sleep(Duration::from_millis(ms)); }       // holds the thread
-async fn good(ms: u64) { tokio::time::sleep(Duration::from_millis(ms)).await; } // yields
+let future = timer("a", 100);           // nothing runs yet
+sleep(Duration::from_millis(50)).await;
+let report = future.await;              // the timer starts now, at +50 ms
 ```
 
-A worker thread runs many tasks by switching between them at `.await` points. A blocking call has no `.await`, so the thread and every task queued on it stall until the call returns. `tokio::join!(bad(100), bad(200))` takes 300 ms, not 200 ms; `cargo run` shows it. Common blocking calls: `std::thread::sleep`, `std::fs`, synchronous HTTP or database clients, and long CPU work such as password hashing.
+An Amp or React promise has already started; a Rust future hasn't. A future you never await is a bug, and the compiler warns about it.
 
-- Under FPM, blocking is harmless because one process serves one request. Swoole has the same trap as Tokio: a blocking call that Swoole doesn't hook stalls every coroutine in the worker.
-- `tokio::task::spawn_blocking(closure)` runs the closure on a separate pool of threads (up to 512 by default) and returns a `JoinHandle`. Use it for bounded blocking work. The closure must be `FnOnce() -> T + Send + 'static`, for the same reasons as `spawn`.
-- Don't use it for work that never ends (use `std::thread::spawn`) or for splitting CPU work across cores (Rayon, lesson 17).
-- A paused test clock hides this bug: `std::thread::sleep` takes real time but doesn't move Tokio's virtual clock.
+### Sequential: await one by one
+
+Each `.await` waits for its future to finish before the next line runs.
+
+```rust
+let a = timer("a", 100).await; // 0–100 ms
+let b = timer("b", 200).await; // 100–300 ms
+// total: 300 ms
+```
+
+### Concurrent: `tokio::join!`
+
+`tokio::join!` awaits several futures at once and returns their results as a tuple, in argument order.
+
+```rust
+let (a, b) = tokio::join!(timer("a", 100), timer("b", 200));
+// a: 0–100 ms, b: 0–200 ms, total: 200 ms
+```
+
+One task polls both futures and switches between them at each `.await`. That's concurrency without parallelism, which is enough for waiting on timers and I/O.
+
+### Spawned: `tokio::spawn`
+
+`tokio::spawn` hands a future to the runtime, which starts it at once, without waiting for an `.await`. It returns a `JoinHandle`.
+
+```rust
+let handle = tokio::spawn(async { 1 + 1 });
+let n = handle.await.unwrap();
+println!("{n}"); // 2
+```
+
+- Spawned tasks can run in parallel on different threads.
+- Awaiting a `JoinHandle<T>` gives `Result<T, JoinError>`. It's `Err` if the task panicked.
+- Dropping a `JoinHandle` doesn't stop the task; it keeps running in the background.
+
+### Spawned tasks must own their data
+
+A spawned task can outlive the function that spawned it, so it can't borrow that function's variables: it must be `'static`. Give it owned data and capture it with `async move`.
+
+```rust
+let name = name.to_owned();            // an owned String, no borrow
+let handle = tokio::spawn(async move { // `move`: the block takes ownership of `name`
+    timer(&name, 100).await
+});
+let report = handle.await?;
+```
+
+`timer(name, 100)` returns a future that borrows `name`, so `tokio::spawn(timer(name, 100))` fails with `borrowed data escapes outside of function`. Without `move`, an `async` block borrows what it uses, like a closure.
+
+### Spawned tasks must be `Send`
+
+The runtime may move a task to another thread at any `.await`, so everything the task holds must be `Send`.
+
+```rust
+let count = Rc::new(5);
+tokio::spawn(async move {
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    println!("{count}");
+});
+// error: future cannot be sent between threads safely
+```
+
+- `Rc` isn't `Send` (its counter isn't atomic); `Arc` is.
+- A `std::sync::MutexGuard` isn't `Send` either (lesson 12).
+- `Send` and `'static` are checked at compile time, even in `#[tokio::test]`, which runs on one thread.
+
+### Testing with a paused clock
+
+`#[tokio::test]` gives each test its own runtime. With `start_paused = true`, Tokio jumps the clock to the next timer whenever all tasks are waiting, so timings are exact and the test finishes instantly.
+
+```rust
+#[tokio::test(start_paused = true)]
+async fn sleeps_100_ms() {
+    let t0 = tokio::time::Instant::now();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(t0.elapsed(), Duration::from_millis(100)); // passes, in no real time
+}
+```
+
+Only Tokio's clock is paused: use `tokio::time::Instant`, not `std::time::Instant`.
+
+### Timeouts cancel by dropping
+
+`tokio::time::timeout` races a future against a deadline. If the deadline wins, the future is dropped, which stops it at its current `.await`.
+
+```rust
+let result = timeout(Duration::from_millis(100), timer("slow", 300)).await;
+println!("{}", result.is_err()); // true: the timer was dropped mid-sleep
+```
+
+`timeout` returns `Result<T, Elapsed>`.
+
+### Don't block in async code
+
+A thread runs many tasks by switching between them at `.await` points. A blocking call has no `.await`, so every task on that thread waits for it.
+
+```rust
+async fn bad(ms: u64) { std::thread::sleep(Duration::from_millis(ms)); }       // blocks the thread
+async fn good(ms: u64) { tokio::time::sleep(Duration::from_millis(ms)).await; } // lets others run
+
+tokio::join!(bad(100), bad(200));   // 300 ms
+tokio::join!(good(100), good(200)); // 200 ms
+```
+
+Blocking calls include `std::thread::sleep`, `std::fs`, synchronous database clients, and heavy CPU work like password hashing. Under PHP-FPM blocking is harmless, because each process serves one request.
+
+### `spawn_blocking`
+
+`tokio::task::spawn_blocking` runs a blocking closure on a separate thread pool and returns a `JoinHandle`.
+
+```rust
+let sum = tokio::task::spawn_blocking(|| (1..=1_000_000u64).sum::<u64>())
+    .await
+    .unwrap();
+println!("{sum}"); // 500000500000
+```
+
+The closure must be `Send + 'static`, for the same reasons as `spawn`.
 
 ## Exercise
 
@@ -144,23 +171,21 @@ Implement in this order:
 1. `timer`: `Instant::now()`, then `tokio::time::sleep(Duration::from_millis(ms)).await`, then `Instant::now()` again. Add `use std::time::Duration;`.
 2. `run_sequential`: two `.await`s.
 3. `run_concurrent`: `tokio::join!` returns a tuple in argument order.
-4. `create_then_wait`: bind the timer future to a variable, sleep, then await it. Check `started_at` against the test.
-5. `run_spawned`: first try `tokio::spawn(timer(first.0, first.1))` and read the error (`borrowed data escapes outside of function`). Then give each task an owned name and use `async move`. A small `fn spawn_timer(name: String, ms: u64) -> JoinHandle<TimerReport>` helper keeps steps 5–7 short. `?` returns a `JoinError` as `Err`.
+4. `create_then_wait`: bind the timer future to a variable, sleep, then await it.
+5. `run_spawned`: try `tokio::spawn(timer(first.0, first.1))` and read the error, then use owned names and `async move`. A `fn spawn_timer(name: String, ms: u64) -> JoinHandle<TimerReport>` helper keeps steps 5–7 short.
 6. `spawn_then_wait`: spawn, sleep, then await the handle.
-7. `run_many`: spawn everything into a `Vec<JoinHandle<TimerReport>>` first, then await the handles in order. `timers.into_iter()` (or `for (name, ms) in timers`) consumes the `Vec`, so each `String` moves into its task without a clone.
-8. `with_timeout`: `tokio::time::timeout(…).await` returns `Result<TimerReport, Elapsed>`; `.ok()` turns it into an `Option`.
-9. `run_blocking`: a single expression around `tokio::task::spawn_blocking`.
-10. `cargo run`. For each timeline, explain why the numbers are what they are. Real time adds a few milliseconds of jitter.
-11. `cargo test --features broken`. Fix the three functions in `src/broken.rs` without changing their signatures or results. Note which bound — `Send` or `'static` — each error comes from.
+7. `run_many`: spawn everything into a `Vec<JoinHandle<TimerReport>>` first, then await the handles in order; `for (name, ms) in timers` moves each `String` without a clone.
+8. `with_timeout`: `tokio::time::timeout(…).await` returns a `Result`; `.ok()` turns it into an `Option`.
+9. `run_blocking`: one expression around `tokio::task::spawn_blocking`.
+10. `cargo run`, and explain why each timeline's numbers are what they are (real time adds a few ms of jitter).
+11. `cargo test --features broken`: fix the three functions in `src/broken.rs` without changing their signatures or results, and note whether each error comes from `Send` or `'static`.
 
-Optional extension: rewrite `run_many` with `tokio::task::JoinSet`. `join_next()` returns results in completion order, so spawn `(index, report)` pairs and put the reports back in input order.
+Optional: rewrite `run_many` with `tokio::task::JoinSet`; `join_next()` returns results in completion order, so spawn `(index, report)` pairs and sort them back.
 
 ## Done when
 
 - `cargo test`, `cargo test --features broken`, `cargo fmt --check`, and `cargo clippy --all-targets --all-features -- -D warnings` pass.
 - You can explain:
   - why `create_then_wait` reports `started_at` at +50 ms, but `spawn_then_wait` at +0 ms
-  - why `join!` is concurrent but not parallel, and when spawned tasks run in parallel
   - why `tokio::spawn` requires `Send` and `'static`, and how each fix in `src/broken.rs` satisfies them
-  - what happens to the timer inside `with_timeout` when the deadline wins
   - why `std::thread::sleep` in async code is a bug, and what `spawn_blocking` does instead

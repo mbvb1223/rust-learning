@@ -18,12 +18,17 @@ pub struct LineItem {
 impl LineItem {
     /// Copies `sku` and `name` into owned `String`s.
     pub fn new(sku: &str, name: &str, unit_price_cents: i64, quantity: u32) -> Self {
-        todo!()
+        Self {
+            sku: sku.to_string(),
+            name: name.to_string(),
+            unit_price_cents,
+            quantity,
+        }
     }
 
     /// `unit_price_cents × quantity`. Assumes the result fits in an `i64`.
     pub fn subtotal_cents(&self) -> i64 {
-        todo!()
+        self.unit_price_cents * i64::from(self.quantity)
     }
 }
 
@@ -41,17 +46,21 @@ pub struct Cart {
 impl Cart {
     /// An empty cart.
     pub fn new() -> Self {
-        todo!()
+        Self { items: Vec::new() }
     }
 
     /// Every line, in cart order.
     pub fn items(&self) -> &[LineItem] {
-        todo!()
+        &self.items
     }
 
     /// The line with this `sku`, borrowed from the cart. `None` if there is none.
     pub fn find(&self, sku: &str) -> Option<&LineItem> {
-        todo!()
+        self.items.iter().find(|item| item.sku == sku)
+    }
+
+    fn position(&self, sku: &str) -> Option<usize> {
+        self.items.iter().position(|item| item.sku == sku)
     }
 
     /// Takes ownership of `item`.
@@ -62,36 +71,58 @@ impl Cart {
     ///
     /// Assumes quantities don't overflow `u32`.
     pub fn add(&mut self, item: LineItem) {
-        todo!()
+        if item.quantity == 0 {
+            return;
+        }
+        if let Some(existing) = self.items.iter_mut().find(|line| line.sku == item.sku) {
+            existing.quantity += item.quantity;
+        } else {
+            self.items.push(item);
+        }
     }
 
     /// Removes the line with this `sku` and hands it back to the caller; the remaining lines keep
     /// their order. `None`, with the cart unchanged, if there is no such line.
     pub fn remove(&mut self, sku: &str) -> Option<LineItem> {
-        todo!()
+        let index = self.position(sku)?;
+        Some(self.items.remove(index))
     }
 
     /// Sets the quantity of an existing line; `0` removes the line.
     /// Returns `true` if a line with this `sku` existed. Otherwise returns `false` and leaves the
     /// cart unchanged — it never adds a line.
     pub fn set_quantity(&mut self, sku: &str, quantity: u32) -> bool {
-        todo!()
+        let Some(index) = self.position(sku) else {
+            return false;
+        };
+        if quantity == 0 {
+            self.items.remove(index);
+        } else {
+            self.items[index].quantity = quantity;
+        }
+        true
     }
 
     /// Sum of every line's subtotal; `0` for an empty cart. Assumes no overflow.
     pub fn total_cents(&self) -> i64 {
-        todo!()
+        let mut total = 0;
+        for item in &self.items {
+            total += item.subtotal_cents();
+        }
+        total
     }
 
     /// Moves every line of `other` into this cart, in `other`'s order, by the same rules as
     /// `add`. Consumes `other`; no `LineItem` is cloned.
     pub fn merge(&mut self, other: Cart) {
-        todo!()
+        for item in other.items {
+            self.add(item);
+        }
     }
 
     /// Consumes the cart and returns its lines in cart order.
     pub fn into_items(self) -> Vec<LineItem> {
-        todo!()
+        self.items
     }
 }
 

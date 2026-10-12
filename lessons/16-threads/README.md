@@ -1,6 +1,6 @@
 # Lesson 16 — Threads and ownership
 
-Count lines and bytes in many files on several threads: implement every `todo!()` in `src/lib.rs`, then fix `src/broken.rs`, until the tests pass.
+Count lines and bytes in many files on several threads: implement every `todo!()` in `src/lib.rs`, then fix `src/broken.rs`.
 
 ## Run
 
@@ -15,196 +15,209 @@ cargo clippy --all-targets --features broken -- -D warnings
 cargo run -- Cargo.toml README.md src missing.txt
 ```
 
-Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.
+Don't run `cargo fix`. `src/broken.rs` only compiles with `--features broken`, and fails on purpose until Part F.
 
-`--features broken` compiles `src/broken.rs`, which fails to build on purpose until Part F. If `cargo test` hangs, a channel `Sender` is still alive somewhere (see "The worker pool").
+If `cargo test` hangs, a channel `Sender` is still alive somewhere (see "Channels").
 
 ## Notes
 
-### PHP shares nothing; Rust threads share everything
+### Threads share memory
 
-| PHP | Parallel work | Shared memory |
-|---|---|---|
-| PHP-FPM | A pool of processes, each handling one request at a time | None by default; shared state goes through the DB, Redis, or APCu (a shared-memory cache with its own locking) |
-| `pcntl_fork()` | A child process with a copy-on-write copy of the parent | None; results come back through pipes, sockets, files, or the exit code (`pcntl_waitpid`) |
-| ext-parallel | `parallel\Runtime` threads, each with its own interpreter (ZTS build) | None; arguments and results are copied, `parallel\Channel` passes messages, `Future::value()` waits |
-
-Rust threads live in one process and can read and write the same memory. Nothing is copied unless you copy it. That is faster and riskier, so the compiler checks every value that crosses a thread boundary. The comparison breaks down here: PHP gets safety by isolating everything at runtime; Rust allows sharing and the type system decides which sharing is safe.
+PHP runs parallel work in separate processes (PHP-FPM, `pcntl_fork`) that share nothing. Rust threads run inside one process and share its memory, so the compiler checks every value that crosses to another thread.
 
 ### Spawn and join
 
+`thread::spawn` starts a thread. `join` waits for it and returns its result:
+
 ```rust
-let path = PathBuf::from("a.txt");
-let handle: JoinHandle<usize> = thread::spawn(move || expensive(&path)); // `path` moves in
-let value = handle.join().unwrap(); // waits; Err only if the thread panicked
+use std::thread;
+
+let name = String::from("a.txt");
+let handle = thread::spawn(move || name.len()); // `name` moves into the thread
+let len = handle.join().unwrap();
+println!("{len}"); // 5
 ```
 
-- `spawn` requires `F: FnOnce() -> T + Send + 'static` and `T: Send + 'static`: both the closure and the value it returns cross threads. `'static` means the closure borrows nothing from the caller's stack, because the thread may outlive the function that started it. `move` hands it owned data instead.
-- `join()` returns `Result<T, Box<dyn Any + Send>>`. A panic ends only that thread; `Err` carries the panic payload, and `std::panic::resume_unwind(payload)` re-raises it in the caller.
-- Dropping a `JoinHandle` detaches the thread. When `main` returns, the process exits and detached threads die mid-work.
-- Like `pcntl_waitpid`, but you get back any `T`, not an exit code.
+- `spawn` can't borrow from the caller (`'static`): the thread may outlive the function. `move` gives it owned data instead.
+- `join()` returns `Err` if the thread panicked. `std::panic::resume_unwind(payload)` re-raises that panic.
+- Spawn all threads first, then join them. Spawning and joining one by one runs one thread at a time.
 
 ### Scoped threads
 
+`thread::scope` joins all its threads before it returns, so they may borrow local data:
+
 ```rust
-let words = vec!["a", "bb", "ccc"];
-let (left, right) = words.split_at(1);
+let data = vec![1, 2, 3, 4];
+let (left, right) = data.split_at(2);
 let total = thread::scope(|s| {
-    let a = s.spawn(|| left.len());   // borrows `words`: no Arc, no clone, no 'static
-    let b = s.spawn(|| right.len());
+    let a = s.spawn(|| left.iter().sum::<i32>());
+    let b = s.spawn(|| right.iter().sum::<i32>());
     a.join().unwrap() + b.join().unwrap()
-}); // every thread spawned on `s` has finished here
+});
+println!("{total}"); // 10
 ```
 
-- `scope` joins all its threads before returning, so they may borrow anything that outlives the scope.
-- Many threads may share a `&T` (requires `T: Sync`). A `&mut` goes to exactly one thread: split data with `chunks_mut` or `split_at_mut` to give each thread its own part.
-- If a loop variable is an owned value, such as an index `i`, write `s.spawn(move || …)`. Without `move` the closure borrows `i`, which dies at the end of the iteration (E0373). Loop variables that are themselves references (from `chunks`, `chunks_mut`) work either way, because the closure reborrows the data they point to. `move` is still the habit to build.
-- If a scoped thread panicked and you didn't join it, `scope` panics after joining the rest.
-
-### `Send` and `Sync` in plain words
-
-- `Send`: a value may be **moved** to another thread.
-- `Sync`: a value may be **shared** (`&T`) by several threads at once. Formally, `T: Sync` exactly when `&T: Send`.
-- Both are auto traits: a struct is `Send`/`Sync` when all its fields are. You rarely write them; you meet them in error messages.
-
-| Type | `Send` | `Sync` | Why |
-|---|---|---|---|
-| `i64`, `String`, `PathBuf`, `Vec<T>` | yes | yes | plain owned data (`Vec<T>`: if `T` is) |
-| `Rc<T>` | no | no | non-atomic refcount: two threads cloning at once corrupt it |
-| `Arc<T>` | if `T: Send + Sync` | if `T: Send + Sync` | atomic refcount; hands out `&T` only |
-| `RefCell<T>`, `Cell<T>` | if `T: Send` | no | the runtime borrow flag isn't atomic |
-| `Mutex<T>` | if `T: Send` | if `T: Send` | the lock makes every access exclusive |
-| `MutexGuard<'_, T>` | no | if `T: Sync` | must unlock on the thread that locked |
-| `mpsc::Receiver<T>` | if `T: Send` | no | one consumer at a time |
-
-### Why data races don't compile
-
-A data race: two threads touch the same memory at the same time, at least one writes, and nothing orders them. Inside one thread Rust already enforces "many `&T` or one `&mut T`". `Send` and `Sync` extend that rule across threads:
-
-- `thread::spawn` demands `Send + 'static`, so a thread can't keep a reference into another thread's stack, or an `Rc` whose count another thread updates.
-- Mutating shared data needs either `&mut` (exclusive by construction) or a `Sync` type that synchronizes internally (`Mutex`, `RwLock`, atomics).
-
-The compiler does **not** catch deadlocks, logic races (check-then-act across two separate lock calls), or nondeterministic ordering. That is why `run_pool` sorts its output.
-
-### `Arc` and `Mutex`
+Many threads can share a `&T`, but a `&mut` goes to one thread only. `chunks_mut` splits a slice into parts that can't overlap:
 
 ```rust
-let total = Arc::new(Mutex::new(Summary::default()));
-let for_thread = Arc::clone(&total);              // refcount +1, same Mutex
-thread::spawn(move || {
-    let mut guard = for_thread.lock().unwrap();   // blocks until the lock is free
-    guard.files += 1;
-});                                               // guard dropped: unlocked
+let mut nums = [1, 2, 3, 4, 5, 6];
+thread::scope(|s| {
+    for chunk in nums.chunks_mut(2) {
+        s.spawn(move || chunk.iter_mut().for_each(|n| *n *= 10));
+    }
+});
+println!("{nums:?}"); // [10, 20, 30, 40, 50, 60]
 ```
 
-- `Arc` ≈ a PHP object handle with a refcount, except the count is atomic and it only hands out `&T`. Shared **and** mutable needs a `Mutex` inside.
-- `Mutex<T>` owns the data. The only way in is `lock()`, which returns a guard; dropping the guard unlocks. Unlike `flock()` or a semaphore next to the data, you can't touch the data without the lock.
-- Keep guards short: lock, update, drop. A guard held across slow work makes every other thread wait.
+Write `s.spawn(move || …)` in loops. Without `move`, a loop variable like `i` is borrowed and dies too early (E0373).
+
+### Send and Sync
+
+- `Send`: a value can be **moved** to another thread.
+- `Sync`: a value can be **shared** (`&T`) by several threads.
+- A type gets them automatically when all its fields have them. You meet them in error messages.
+
+```rust
+let rc = Rc::new(5);
+thread::spawn(move || println!("{rc}"));
+// error[E0277]: `Rc<i32>` cannot be sent between threads safely
+```
+
+- `Rc<T>` isn't `Send`: use `Arc<T>`.
+- `RefCell<T>` isn't `Sync`: use `Mutex<T>`.
+- `i64`, `String`, `Vec<T>`, `Arc<T>`, `Mutex<T>` are thread-safe when what's inside is.
+
+That's why a data race is a compile error. A deadlock is not.
+
+### Arc and Mutex
+
+`Arc` shares one value between threads. `Mutex` lets one thread at a time change it:
+
+```rust
+use std::sync::{Arc, Mutex};
+
+let count = Arc::new(Mutex::new(0));
+let mut handles = Vec::new();
+for _ in 0..4 {
+    let count = Arc::clone(&count);
+    handles.push(thread::spawn(move || *count.lock().unwrap() += 1));
+}
+for handle in handles {
+    handle.join().unwrap();
+}
+println!("{}", count.lock().unwrap()); // 4
+```
+
+- `lock()` returns a guard. Dropping the guard unlocks.
+- The data lives inside the `Mutex`, so you can't touch it without the lock. Keep guards short.
 
 ### Poisoning
 
-If a thread panics while holding a guard, the mutex is **poisoned**: every later `lock()` returns `Err(PoisonError)`, because the data may be half-updated.
-
-- `lock().unwrap()` propagates the panic. Right when a half-done update could break invariants (two fields that must agree).
-- `lock().unwrap_or_else(PoisonError::into_inner)` takes the guard anyway. Fine when every update leaves the data valid, like `Summary::add` on one struct.
-- PHP has no equivalent: a fatal error ends the request, and its memory with it.
-
-### Channels and backpressure
+If a thread panics while holding the lock, the mutex is **poisoned**: later `lock()` calls return `Err`.
 
 ```rust
-let (tx, rx) = mpsc::sync_channel::<PathBuf>(8); // bounded: send blocks while 8 are queued
-let (tx, rx) = mpsc::channel::<FileReport>();    // unbounded: send never blocks
-tx.send(path)?;                                  // `path` moves into the channel
-for report in rx {}                              // ends once every Sender is dropped and the queue is empty
+let guard = mutex.lock().unwrap();                                // panics if poisoned
+let guard = mutex.lock().unwrap_or_else(PoisonError::into_inner); // takes the guard anyway
 ```
 
-- `mpsc`: many producers (`Sender` is `Clone`), one consumer (`Receiver` isn't). N workers share one receiver as `Arc<Mutex<Receiver<T>>>`.
-- Sending moves the value: the sender can't touch it any more, so the data itself needs no lock.
-- **Backpressure**: with `sync_channel(n)`, a fast producer blocks once `n` jobs are waiting, so memory holds `n` queued jobs instead of the whole input. `sync_channel(0)` is a rendezvous: each `send` waits for a `recv`. Compare a RabbitMQ prefetch limit, or a `parallel\Channel` with a capacity.
-- **Shutdown is ownership**: `recv()` returns `Err` once all `Sender`s are dropped and the queue is empty. No "stop" message needed.
+Recover only when every update leaves the data valid, like one `Summary::add`.
+
+### Channels
+
+A channel moves values from one thread to another:
+
+```rust
+use std::sync::mpsc;
+
+let (tx, rx) = mpsc::channel();
+thread::spawn(move || {
+    for n in 1..=3 {
+        tx.send(n).unwrap();
+    }
+}); // `tx` is dropped when the thread ends
+for n in rx {
+    println!("{n}"); // 1, then 2, then 3
+}
+```
+
+- `send` moves the value. The sender can't touch it afterwards, so it needs no lock.
+- `Sender` can be cloned (many producers). `Receiver` can't (one consumer): workers share it as `Arc<Mutex<Receiver<T>>>`.
+- `for n in rx` ends once every `Sender` is dropped. A forgotten `Sender` makes it wait forever.
+
+### Backpressure
+
+`sync_channel(n)` is a bounded channel: `send` blocks while `n` items are waiting.
+
+```rust
+let (tx, rx) = mpsc::sync_channel::<PathBuf>(8);
+```
+
+- A fast producer waits for slow workers, so memory holds at most 8 jobs, not the whole input.
+- `sync_channel(0)`: each `send` waits for a `recv`.
+- Like a RabbitMQ prefetch limit.
 
 ### The worker pool
 
 ```text
 caller ──sync_channel(queue)──▶ worker 1..N ──channel()──▶ caller
-         paths, bounded          job(&path)    FileReport
+          paths, bounded         job(&path)    FileReport
 ```
 
-The order matters:
-
-1. Create both channels; wrap the job `Receiver` in `Arc<Mutex<…>>`.
-2. Spawn N workers. Each gets an `Arc` clone of the job receiver and a clone of the result `Sender`.
-3. Drop the caller's result `Sender` (or collecting never ends) and its `Arc` of the receiver (if every worker dies, `send` then fails instead of blocking forever).
-4. Send each path as you pull it, then drop the job `Sender`. Workers drain the queue and exit.
+1. Create both channels. Wrap the job `Receiver` in `Arc<Mutex<…>>`.
+2. Spawn N workers, each with an `Arc` clone of the job receiver and a clone of the result `Sender`.
+3. Drop the caller's result `Sender` (or collecting never ends) and its `Arc` of the job receiver.
+4. Send each path, then drop the job `Sender`. Workers finish the queue and exit.
 5. Collect results until the channel closes, join the workers, sort by path.
 
-Gotchas:
+Receive in its own statement, so the lock is released before the job runs:
 
-- `while let Ok(path) = rx.lock().unwrap().recv() { … }` keeps the guard alive for the **whole loop body** (temporaries in a `while let` or `match` scrutinee live until the body ends), so workers run one job at a time. Receive in its own statement:
+```rust
+let next = rx.lock().unwrap().recv(); // lock released at the `;`
+let Ok(path) = next else { break };
+```
 
-  ```rust
-  let next = rx.lock().unwrap().recv(); // guard dropped at the `;`
-  let Ok(path) = next else { break };
-  ```
+`while let Ok(path) = rx.lock().unwrap().recv() { … }` keeps the lock for the whole loop body, so only one job runs at a time.
 
-- If the result channel were bounded too, the pool could deadlock: workers block sending results nobody reads yet, while the caller blocks sending jobs nobody takes.
-- Completion order is random. Sort, or keep input order by joining handles in order (as `count_files_spawned` does).
+### Channel or shared state?
 
-### Deadlocks are still possible
+- Channel (`run_pool` + `summarize`): workers move each report to one owner. No lock on results, and per-file detail is kept.
+- Shared (`summarize_shared`): every thread updates one `Arc<Mutex<Summary>>`. One lock per file, and only totals survive.
 
-Rust prevents data races, not deadlocks:
-
-- Locking a `Mutex` the current thread already holds never returns (it may deadlock or panic; std leaves it unspecified).
-- Two threads taking two locks in opposite orders. Always lock in one fixed order.
-- Waiting on a channel whose `Sender` is still alive.
-
-### Results without a global accumulator
-
-| | Channel: `run_pool` + `summarize` | Shared: `summarize_shared` |
-|---|---|---|
-| Who owns the results | the collector; workers move each report out | every thread, through `Arc<Mutex<Summary>>` |
-| Locking | none on results | one lock per file, contended |
-| Per-file detail | kept, sortable | lost; only totals |
-| A panic mid-update | nothing shared to corrupt | poisons the total |
-
-Prefer moving results to one owner, like PHP workers returning results to a coordinator instead of all updating one row with `SELECT … FOR UPDATE`. Use shared state when threads must read or update one structure during the run (a cache, a rate limiter). For a single counter, atomics (`AtomicUsize`) are lighter; see the roadmap's advanced topics.
+Prefer moving results to one owner. Share state only when threads must see each other's updates during the run (a cache, a rate limiter).
 
 ## Exercise
 
 Part A — the job:
 
 1. `count`: count `b'\n'` bytes, then add one line if `data` is non-empty and doesn't end in `\n` (`data.last()`).
-2. `count_file`: `fs::read(path)`, then `.map(…)` and `.map_err(|e| e.kind())`. `Outcome` stores `io::ErrorKind` because `io::Error` is neither `Clone` nor `PartialEq`.
+2. `count_file`: `fs::read(path)`, then `.map(…)` and `.map_err(|e| e.kind())`.
 
 Part B — spawn and join:
 
-3. `spawn_count`: `thread::spawn(move || …)`. Build the report inside the thread so the path travels in and back out.
-4. `count_files_spawned`: collect all handles into a `Vec` first, then join them in order. A single lazy `.map(spawn_count).map(|h| h.join())` chain spawns, joins, spawns, joins: one file at a time.
+3. `spawn_count`: `thread::spawn(move || …)`; build the report inside the thread.
+4. `count_files_spawned`: collect all handles into a `Vec` first, then join them in order.
 
 Part C — scoped threads:
 
-5. `count_in_parts`: chunk length `data.len().div_ceil(parts)`; `data.chunks(len)` then yields at most `parts` chunks (and panics for `len == 0`, hence the empty check). Count only `\n` per chunk and add the final unterminated line once. Try summing `count(chunk)` first and find the input that breaks it.
-6. `uppercase_in_parts`: `data.chunks_mut(len)`, one scoped thread per chunk, `make_ascii_uppercase`. No lock: the chunks can't overlap, and the borrow checker knows it.
+5. `count_in_parts`: chunk length `data.len().div_ceil(parts)`, then `data.chunks(len)`. Count only `\n` per chunk and add the final unterminated line once (summing `count(chunk)` breaks; find the input).
+6. `uppercase_in_parts`: `data.chunks_mut(len)`, one scoped thread per chunk, `make_ascii_uppercase`.
 
 Part D — the worker pool:
 
 7. `lock_recovering`: one line, see "Poisoning".
-8. `run_pool`: follow "The worker pool". `assert!` the worker count first. A `fn` pointer is `Copy + Send + 'static`, so each worker's `move` closure can take `job`. Re-raise a worker panic with `resume_unwind`, or `expect` on `join()`.
+8. `run_pool`: follow "The worker pool". `assert!` the worker count first. A `fn` pointer is `Copy + Send + 'static`, so each `move` closure can take `job`. Re-raise a worker panic with `resume_unwind`, or `expect` on `join()`.
 
 Part E — totals:
 
 9. `Summary::add`: one `match`.
 10. `summarize`: a loop over `add`.
-11. `summarize_shared`: group length `paths.len().div_ceil(workers).max(1)`; `chunks(len)` plus `to_vec()` gives each thread an owned group. Update through `lock_recovering`. After joining, `*lock_recovering(&total)` copies the result out (`Summary` is `Copy`).
+11. `summarize_shared`: group length `paths.len().div_ceil(workers).max(1)`; `chunks(len)` plus `to_vec()` gives each thread an owned group. Update through `lock_recovering`, then return `*lock_recovering(&total)`.
 
 Part F — fix `src/broken.rs`:
 
-12. Run `cargo test --features broken`. Fix the three functions in order, reading each full error first: the compiler names the missing `Send`, `Sync`, or `'static`. Tools: `Arc`, `Mutex`, `thread::scope`.
+12. Run `cargo test --features broken`. Fix the three functions in order, reading each full error first. Tools: `Arc`, `Mutex`, `thread::scope`.
 
-Optional extensions:
-
-- Make `run_pool` generic over `F: Fn(&Path) -> Outcome + Send + Sync + 'static`, share it through `Arc<F>`, and pass a closure that captures a setting. Remove each bound once and read the error.
-- Rewrite `run_pool` with `thread::scope`: the receiver needs no `Arc`, and `job` no longer needs `'static`.
+Optional: rewrite `run_pool` with `thread::scope`: the receiver needs no `Arc`, and `job` no longer needs `'static`.
 
 ## Done when
 
@@ -213,7 +226,3 @@ Optional extensions:
   - why `thread::spawn` needs `move` and `'static`, and why `thread::scope` doesn't need `'static`
   - what `Send` and `Sync` mean, and why `Rc` and `RefCell` failed in `broken.rs`
   - what makes the pool's workers exit, and why a forgotten `Sender` makes the test hang
-  - where `run_pool` blocks when workers are slower than the producer, and what that protects
-  - why `count_in_parts` can't just add up `count` of each chunk
-  - what `summarize_shared` gives up compared with collecting results through a channel
-  - when recovering a poisoned mutex is acceptable

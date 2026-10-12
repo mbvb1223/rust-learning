@@ -15,161 +15,208 @@ cargo run -- add "Buy milk"
 cargo run -- list
 ```
 
-The first build compiles SQLite itself from C source, so it takes a while. `cargo run` keeps its data in `tasks.db` in this directory (git-ignored); delete the file to start over.
-
-Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.
+The first build compiles SQLite from C, so it takes a few minutes. `cargo run` keeps its data in `tasks.db` here (git-ignored); delete it to start over. Don't run `cargo fix`.
 
 ## Notes
 
-### The pieces
+### SQLx
 
-| File | Role | PHP equivalent |
-|---|---|---|
-| `migrations/0001_create_tasks.sql` | Schema, applied once per database | A Doctrine migration |
-| `build.rs` | Rebuilds the crate when a migration is added | — |
-| `src/lib.rs` | `connect`, `TaskRepo` — the exercise | A repository class over PDO |
-| `src/main.rs` | A small CLI over the repository (given) | A `bin/console` command |
-| `tests/persistence.rs` | File-backed tests through the public API | PHPUnit integration tests |
+SQLx is an async SQL library: every call returns a future you `.await`, so tests use `#[tokio::test]`. Its `sqlite` feature bundles SQLite itself, so nothing else needs installing.
 
-```toml
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
-```
+### Connection pool
 
-- `runtime-tokio`: every SQLx call is async and needs a runtime (lesson 11). Tests use `#[tokio::test]`.
-- `sqlite`: the driver plus a bundled SQLite; no system library needed.
-- `migrate` + `macros`: `sqlx::migrate!()`. `macros` also provides `#[derive(sqlx::FromRow)]`.
-- The package is named `sqlx-tasks`, not `sqlx`, so that `sqlx::…` always means the dependency.
-
-### A pool, not a connection
+A `SqlitePool` keeps a few connections open and lends one to each query.
 
 ```rust
+use std::str::FromStr;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
 let options = SqliteConnectOptions::from_str("sqlite:tasks.db")?.create_if_missing(true);
-let pool: SqlitePool = SqlitePoolOptions::new()
+let pool = SqlitePoolOptions::new()
     .max_connections(5)
     .connect_with(options)
     .await?;
 ```
 
-- PHP-FPM opens a PDO connection per request and drops it when the request ends. A Rust server is one long-running process handling many requests at once. A pool keeps up to N connections open and lends one to each query.
-- `SqlitePool` wraps an `Arc`: `clone()` is cheap and every clone shares the same connections. `TaskRepo` derives `Clone` for the same reason. Shared app state (lesson 12) can hold it directly; the pool already handles concurrent use, so no `Arc<Mutex<…>>` is needed.
-- URLs: `sqlite:tasks.db` is relative to the working directory; `sqlite:///abs/path/tasks.db` is absolute. Without `create_if_missing(true)`, a missing file is an error. PDO's SQLite driver creates it without asking.
-- SQLite allows one writer at a time. Concurrent writers wait for each other up to `busy_timeout` (SQLx default: 5 s).
-- SQLite's C API is blocking. SQLx gives each SQLite connection its own background thread and awaits its replies, so queries don't block the Tokio runtime (lesson 11). That's why you don't need `spawn_blocking` here.
+- Without `create_if_missing(true)`, a missing file is an error.
+- `pool.clone()` is cheap: clones share the same connections. That's why `TaskRepo` derives `Clone`.
 
-### Queries: `query`, `query_as`, `bind`
+PHP-FPM opens a PDO connection per request. A Rust server is one long-running process serving many requests at once, so it shares a pool.
+
+### Queries
+
+`sqlx::query_as` runs SQL and turns each row into a struct. Each `?` in the SQL is a placeholder, filled in order by `.bind()`:
 
 ```rust
 let task: Option<Task> = sqlx::query_as("SELECT id, title, completed FROM tasks WHERE id = ?")
-    .bind(id)
-    .fetch_optional(&self.pool)
+    .bind(1)
+    .fetch_optional(&pool)
+    .await?;
+println!("{task:?}"); // Some(Task { id: 1, title: "Buy milk", completed: false })
+```
+
+Pick the fetch method by how many rows you expect:
+
+- `fetch_one`: exactly one row; no row is `Err(RowNotFound)`.
+- `fetch_optional`: `Option<T>`.
+- `fetch_all`: `Vec<T>`.
+
+For SQL that returns no rows, use `sqlx::query(…).execute(&pool)`. Its `.rows_affected()` counts the matched rows; in SQLite that includes rows whose value didn't change.
+
+### Mapping rows with `FromRow`
+
+`#[derive(sqlx::FromRow)]` on `Task` maps columns to fields **by name, at runtime**. A missing column fails when the query runs, not when it compiles:
+
+```rust
+// with one row in the table
+let result = sqlx::query_as::<_, Task>("SELECT id, title FROM tasks")
+    .fetch_one(&pool)
+    .await;
+println!("{result:?}"); // Err(ColumnNotFound("completed"))
+```
+
+- List the columns instead of `SELECT *`.
+- `::<_, Task>` names the row type; the `_` (the database) is inferred. Annotating the variable works too.
+- SQLite has no boolean type: `completed` is stored as 0/1, and SQLx decodes it into a `bool`.
+
+### `RETURNING`
+
+`RETURNING` gives back the inserted or updated row in the same statement:
+
+```rust
+let task: Task =
+    sqlx::query_as("INSERT INTO tasks (title) VALUES (?) RETURNING id, title, completed")
+        .bind("Buy milk")
+        .fetch_one(&pool)
+        .await?;
+println!("{}", task.id); // 1
+```
+
+This replaces PDO's `lastInsertId()` plus a second `SELECT`.
+
+### Partial updates with `COALESCE`
+
+Binding `None` sends SQL `NULL`. `COALESCE(?, title)` then keeps the old value:
+
+```rust
+let new_title: Option<&str> = None;
+sqlx::query("UPDATE tasks SET title = COALESCE(?, title) WHERE id = ?")
+    .bind(new_title) // NULL: the title stays as it was
+    .bind(1)
+    .execute(&pool)
     .await?;
 ```
 
-| SQLx | PDO |
-|---|---|
-| `query_as::<_, Task>(sql)` | `prepare($sql)` + `PDO::FETCH_CLASS` |
-| `.bind(value)` | `bindValue()` / `execute([$value])` |
-| `.fetch_one(&pool)` | `fetch()`, but no row is an error (`RowNotFound`), not `false` |
-| `.fetch_optional(&pool)` | `fetch()` → `Option<T>` |
-| `.fetch_all(&pool)` | `fetchAll()` |
-| `query(sql).execute(&pool)` then `.rows_affected()` | `exec()` / `rowCount()` |
-| `.last_insert_rowid()` on that result | `lastInsertId()` |
+### No SQL built from strings
 
-- Every query is a prepared statement. SQLite's placeholder is `?`; Postgres uses `$1`.
-- Binding an `Option<T>` sends `NULL` for `None` and the value for `Some`.
-- `query_as::<_, Task>`: the `_` lets the compiler infer the database from the executor. Annotating the variable (`let task: Option<Task> = …`) works too.
-- `#[derive(sqlx::FromRow)]` maps columns to fields **by name, at runtime**. A missing column is `sqlx::Error::ColumnNotFound`, a wrong type is `ColumnDecode`; neither is a compile error. List columns instead of `SELECT *`.
-- SQLite has no boolean storage: `completed` is an `INTEGER` 0/1 that SQLx decodes into `bool`.
-- `RETURNING id, title, completed` gives back the inserted or updated row in the same statement, with no `lastInsertId()` + `SELECT` round trip.
-
-SQLx 0.9 rejects dynamically built SQL at compile time:
+SQLx 0.9 rejects SQL built at runtime, at compile time:
 
 ```rust
 sqlx::query(format!("SELECT * FROM tasks WHERE title = '{title}'"))
 // error[E0277]: dynamic SQL strings should be audited for possible injections
 ```
 
-`query` takes only a `&'static str` (a literal) or an explicit `AssertSqlSafe(string)`. It's the same idea as Psalm/PHPStan's `literal-string` type. Values always go through `.bind()`.
-
-### Why not `query!`?
-
-`sqlx::query!` and `query_as!` check SQL against a real database **at compile time**: column names, types, and nullability. The cost is build setup: a reachable `DATABASE_URL` for every build, or offline metadata from `cargo sqlx prepare` committed to the repo, plus `sqlx-cli`. This lesson uses the runtime-checked functions, so your tests catch SQL mistakes. The roadmap leaves the macros for a later exercise.
+`query` takes a string literal (`&'static str`), so values must go through `.bind()`.
 
 ### Migrations
 
+`sqlx::migrate!()` embeds the files in `migrations/` into the binary. `.run()` applies the ones not applied yet:
+
 ```rust
-sqlx::migrate!().run(&pool).await?; // embeds ./migrations into the binary at compile time
+sqlx::migrate!().run(&pool).await?; // first run: creates the tasks table
+sqlx::migrate!().run(&pool).await?; // later runs: nothing to do
 ```
 
-- Files are named `<version>_<description>.sql` and run in version order. Applied versions are recorded in `_sqlx_migrations`, like Doctrine's `doctrine_migration_versions`. A second run applies only new files, so `connect` can run migrations on every start.
-- The SQL is compiled into the binary: deploys need no `migrations/` folder.
-- SQLx stores a checksum per applied migration. Edit an applied file and the next run fails with `VersionMismatch(1)`. Add a new migration instead. Doctrine doesn't check this.
-- Cargo doesn't watch `migrations/` for new files on its own. `build.rs` prints `cargo:rerun-if-changed=migrations` so it does; `sqlx migrate build-script` generates that file.
-- The `?` compiles because `sqlx::Error` implements `From<MigrateError>`.
+- Files are named `<version>_<description>.sql` and run in version order. SQLx records applied ones in `_sqlx_migrations`, like Doctrine's migration table.
+- Never edit an applied migration: its checksum changes and the next run fails with `VersionMismatch`. Add a new file instead.
+- `build.rs` tells Cargo to rebuild when you add a migration file.
 
 ### Transactions
 
+`pool.begin()` starts a transaction. Run each query on `&mut *tx`, then `commit()`:
+
 ```rust
-let mut tx = self.pool.begin().await?;                     // PDO::beginTransaction()
-sqlx::query("…").bind(value).execute(&mut *tx).await?;     // runs inside the transaction
-tx.commit().await?;                                        // PDO::commit()
+let mut tx = pool.begin().await?;
+sqlx::query("INSERT INTO tasks (title) VALUES (?)")
+    .bind("a")
+    .execute(&mut *tx)
+    .await?;
+tx.commit().await?;
 ```
 
-- **Dropping a `Transaction` without `commit()` rolls it back.** Every early `return` and every `?` is a rollback, with no `try { … } catch { rollBack(); throw; }`. This is ownership doing cleanup: SQLx queues the rollback and runs it when the connection is next used or returns to the pool.
-- `&mut *tx`: `Transaction` derefs to the connection. `&mut *tx` lends that connection to one query, so `tx` is still yours for the next query and for `commit()`. Plain `&mut tx` doesn't compile (E0277: `&mut Transaction` is not an `Executor`). `Executor` is implemented for `&mut SqliteConnection`, and trait bounds don't auto-deref, so you deref by hand.
-- Trap: a query given `&self.pool` inside a transaction runs on another connection, **outside** the transaction. With a one-connection pool it waits for the connection the transaction holds and fails with `PoolTimedOut` after 30 s. So inside `create_many`, don't call `self.create()`; run the SQL on `&mut *tx`.
-- For `UPDATE`, SQLite's `rows_affected()` counts matched rows even when the value doesn't change. MySQL's `rowCount()` counts only changed rows by default.
+Dropping a transaction without `commit()` rolls it back:
+
+```rust
+{
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM tasks").execute(&mut *tx).await?;
+} // tx dropped: rolled back, nothing deleted
+```
+
+- So every `?` or early `return` before `commit()` is a rollback. No `try { … } catch { rollBack(); }` needed.
+- `&mut *tx` lends the transaction's connection to one query. Plain `&mut tx` doesn't compile.
+- A query on `&self.pool` runs **outside** the transaction, on another connection. With a one-connection pool it waits for the connection the transaction holds and fails with `PoolTimedOut`. So `create_many` can't call `self.create()`.
 
 ### In-memory databases for tests
 
-| Connect options | Do the pool's connections share data? |
-|---|---|
-| `SqliteConnectOptions::new()` or `.in_memory(true)` | No: each connection opens its own empty database |
-| `SqliteConnectOptions::from_str("sqlite::memory:")` | Yes: SQLx 0.9 names it uniquely in shared-cache mode; each parse is a new database |
-
-In PHP, `new PDO('sqlite::memory:')` is one database per PDO object. With one connection per request, you never notice. With a pool and the first row's options, a migration on connection A creates tables that connection B doesn't have: `no such table: tasks`, depending on which connection the pool hands out.
-
-Even a shared in-memory database disappears when its last connection closes. The pool closes idle connections after 10 minutes and old ones after 30 minutes by default. So `connect_in_memory` keeps exactly one connection, open for the pool's whole life:
+`SqliteConnectOptions::new()` opens an in-memory database. Each connection gets its own empty one, and it disappears when that connection closes. So keep exactly one connection, open for the pool's whole life:
 
 ```rust
-SqlitePoolOptions::new()
+let pool = SqlitePoolOptions::new()
     .max_connections(1)
     .idle_timeout(None)
     .max_lifetime(None)
+    .connect_with(SqliteConnectOptions::new())
+    .await?;
 ```
 
-A single connection also makes the pool-inside-a-transaction bug fail loudly. Each test calls `connect_in_memory()` and gets its own database, so tests run in parallel without interfering. The file-backed tests use `tempfile::tempdir()` (a dev-dependency); the directory is deleted when the guard is dropped.
+Every call gives a new, separate database, so tests run in parallel without sharing data.
 
-### Errors
+### Validation errors vs database errors
 
-`RepoError` separates client mistakes (`Validation`, a 422 response later) from infrastructure failures (`Database`, a 500 that hides the details). `impl From<sqlx::Error> for RepoError` makes `?` convert SQLx errors. `connect` returns plain `sqlx::Error`: a failed startup is not a client error.
+`RepoError::Validation` is the client's mistake (a 422 in lesson 14). `RepoError::Database` is a server failure (a 500 that hides the details). `From<sqlx::Error> for RepoError` lets `?` convert SQLx errors:
+
+```rust
+let result = sqlx::query("DELETE FROM tasks").execute(&self.pool).await?; // sqlx::Error → RepoError
+```
+
+### Counting characters
+
+`trim()` returns a slice of the input, without copying. `len()` counts bytes; `chars().count()` counts characters:
+
+```rust
+let title = "  café ".trim();
+println!("{title}");                   // café
+println!("{}", title.len());           // 5
+println!("{}", title.chars().count()); // 4
+```
+
+Like PHP's `strlen()` vs `mb_strlen()`.
 
 ## Exercise
 
 Implement in this order:
 
-1. `From<sqlx::Error> for RepoError`.
-2. `validate_title`: `trim()` returns a sub-slice of the input, with no allocation. Count with `chars().count()`; `len()` counts bytes.
-3. `connect_in_memory`: the pool options above with `SqliteConnectOptions::new()` (its default filename is `:memory:`), then `sqlx::migrate!().run(&pool).await?`. Import `sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions}`.
-4. `connect`: `SqliteConnectOptions::from_str(url)?.create_if_missing(true)`, a pool, migrations. `from_str` needs `use std::str::FromStr;`.
-5. `create`: validate first, then `INSERT … RETURNING id, title, completed` with `query_as` and `fetch_one`. A `RowNotFound` error means the `RETURNING` clause is missing.
-6. `get` and `list`: `fetch_optional` and `fetch_all`. Don't rely on SQLite's default row order; say `ORDER BY id`.
-7. `delete`: `execute` and `rows_affected()`.
-8. `update`: reject an empty update or an invalid title before any query. One `UPDATE … RETURNING` handles the partial update if a `NULL` bind means "keep the old value" (SQL `COALESCE`). `fetch_optional` returns `None` for a missing id. To validate an `Option<String>` with `?`, look up `Option::as_deref` and `Option::transpose`; `?` then returns the `Err` early and leaves an `Option<&str>`.
-9. `create_many`: `begin`, insert each title on `&mut *tx`, `commit`. Let `?` handle the rollback.
-10. `complete_many`: `UPDATE tasks SET completed = 1 WHERE id = ?` per id. If `rows_affected()` is 0, `return Ok(false)` without committing.
+1. `From<sqlx::Error> for RepoError`: wrap the error in `Database`.
+2. `validate_title`: `trim()`, then check `chars().count()`.
+3. `connect_in_memory`: the one-connection pool above, then `sqlx::migrate!().run(&pool).await?`.
+4. `connect`: `SqliteConnectOptions::from_str(url)?.create_if_missing(true)` (needs `use std::str::FromStr;`), a pool, then migrations.
+5. `create`: validate first, then `INSERT … RETURNING id, title, completed` with `query_as` and `fetch_one`.
+6. `get` and `list`: `fetch_optional` and `fetch_all`; the list needs `ORDER BY id`.
+7. `delete`: `execute`, then `rows_affected()`.
+8. `update`: validate before any query, then one `UPDATE … COALESCE … RETURNING` with `fetch_optional`. For the `Option<String>` title, look up `Option::as_deref` and `Option::transpose`.
+9. `create_many`: `begin`, insert each title on `&mut *tx`, `commit`; `?` handles the rollback.
+10. `complete_many`: `UPDATE tasks SET completed = 1 WHERE id = ?` per id; if `rows_affected()` is 0, `return Ok(false)` without committing.
 
-Then use the CLI: `add` a few tasks, `done` or `rm` some, and run `list` again. Every `cargo run` is a new process using the same data.
+Then try the CLI: `add` a few tasks, `done` or `rm` some, and `list` again. Each `cargo run` is a new process reading the same `tasks.db`.
 
-Optional extension: add `migrations/0002_add_priority.sql` with `ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`, then add `priority: i64` to `Task`. Follow the `ColumnNotFound` failures to every query that must select the new column, and update the `Task` values the tests build. Then edit `0001_create_tasks.sql` and run `cargo run -- list` against your existing `tasks.db` to see the checksum check. Revert that edit afterwards.
+Optional: add `migrations/0002_add_priority.sql` (`ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`) and a `priority: i64` field on `Task`, then fix each `ColumnNotFound`.
 
 ## Done when
 
 - `cargo test`, `cargo fmt --check`, and `cargo clippy --all-targets -- -D warnings` pass.
 - `cargo run -- list` shows tasks added by earlier runs.
 - You can explain:
-  - why `.bind()` is safe where `format!` into SQL isn't, and how SQLx 0.9 stops the latter at compile time
-  - what happens to `create_many`'s transaction when `?` returns early, and why it needs no explicit rollback
-  - why queries inside a transaction use `&mut *tx`, and what goes wrong with `&self.pool`
-  - why `connect_in_memory` uses one connection with no idle timeout or maximum lifetime
-  - why restarting the CLI neither re-runs nor breaks the migration
+  - why `.bind()` is safe where `format!` into SQL isn't
+  - what happens to `create_many`'s transaction when `?` returns early
+  - why queries inside a transaction use `&mut *tx`, not `&self.pool`

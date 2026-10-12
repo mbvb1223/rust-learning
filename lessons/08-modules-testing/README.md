@@ -1,6 +1,6 @@
 # Lesson 08 — Modules and tests
 
-Build a Markdown table-of-contents CLI as a library plus a thin binary: implement every `todo!()` in `src/` and `tests/` until the tests pass.
+Build a Markdown table-of-contents CLI as a library plus a thin binary, with unit, integration, and doc tests.
 
 ## Run
 
@@ -14,94 +14,127 @@ cargo clippy --all-targets -- -D warnings
 cargo run -- README.md
 ```
 
-Until a function is implemented, its parameters show `unused variable` warnings, and `MAX_LEVEL`, `is_fence`, and `taken` show dead-code warnings. Don't run `cargo fix`; it renames parameters to `_name`.
+Unused-variable and dead-code warnings (`MAX_LEVEL`, `is_fence`, `taken`) are expected until you implement the stubs. Don't run `cargo fix`.
 
-`cargo test` stops after the first test target that fails (the unit tests). Add `--no-fail-fast` to see the integration and doc tests too.
+`cargo test` stops at the first failing test target. Add `--no-fail-fast` to see them all.
 
 ## Notes
 
-### Modules are declared, not discovered
+### Modules
+
+`mod name;` tells Rust to compile a file as a module. A module's children live in a folder named after it:
 
 ```text
-src/lib.rs              crate root: `pub mod markdown;`
-src/markdown.rs         module `markdown`: `mod fence;` and `pub mod slug;`
-src/markdown/fence.rs   module `markdown::fence`
-src/markdown/slug.rs    module `markdown::slug`
+src/lib.rs              pub mod markdown;
+src/markdown.rs         mod fence;  pub mod slug;
+src/markdown/fence.rs   module markdown::fence
+src/markdown/slug.rs    module markdown::slug
 ```
 
-- In `lib.rs`, `mod markdown;` loads `src/markdown.rs`. In `markdown.rs`, `mod fence;` loads `src/markdown/fence.rs`: a module's children live in a folder named after it. The older `src/markdown/mod.rs` layout also works; having both for one module is an error.
-- A `.rs` file that no `mod` declares is not compiled at all. No error, no warning.
-- PHP: Composer's PSR-4 autoloader finds `App\Markdown\Slug` in `src/Markdown/Slug.php` on first use. Rust builds the whole module tree at compile time from `mod` declarations. The namespace still mirrors the folders, but `mod` creates the link; `use` never loads anything.
-- `mod name { … }` defines a module inline. `#[cfg(test)] mod tests { … }` is one.
+A `.rs` file that no `mod` declares isn't compiled at all. PHP's autoloader finds a class on first use; Rust builds the whole module tree from `mod` lines.
 
 ### Paths and `use`
 
 ```rust
-crate::markdown::slug::Slugger   // absolute, from this crate's root   ≈ \App\Markdown\Slug\Slugger
-super::Heading                   // from the parent module
-self::fence::is_fence            // from the current module
-modules_testing::generate_toc    // from another crate: how main.rs and tests/ see the library
+crate::markdown::slug::Slugger // from this crate's root
+super::Heading                 // from the parent module
+modules_testing::generate_toc  // from outside: main.rs and tests/
 
-use crate::markdown::slug::Slugger;   // a shortcut in this module's scope
-use crate::markdown::{self, Heading}; // `markdown` itself and `markdown::Heading`
-pub use markdown::Heading;            // re-export: `modules_testing::Heading` now works too
+use crate::markdown::slug::Slugger; // a shortcut, for this module only
+pub use markdown::Heading;          // re-export: `modules_testing::Heading` works too
 ```
 
-- `use` works like PHP's file-level `use`, but per **module**: a `use` in `lib.rs` doesn't reach `toc.rs`. `use super::*;` in `mod tests` imports everything from the parent.
-- `pub use` builds a facade. Callers write `modules_testing::Heading`; the type stays in `markdown`. Both paths name the same type (`tests/api.rs` checks it).
-- The package is `modules-testing`; in code the crate is `modules_testing`. Hyphens become underscores.
+- `use` is per module: a `use` in `lib.rs` doesn't reach `toc.rs`.
+- The package `modules-testing` is the crate `modules_testing` in code: hyphens become underscores.
 
-### Visibility is per module, not per class
+### Visibility
 
-| PHP | Rust | Visible to |
-|---|---|---|
-| `public` | `pub` | anyone who can reach the path |
-| `private` | (nothing) | the current module and its children |
-| `protected` | — | no inheritance, so no equivalent |
-| `@internal` (checked only by static analysers) | `pub(crate)` | the whole crate, enforced by the compiler |
-| — | `pub(super)` | the parent module and its children |
+Items are private to their module unless you mark them:
 
-- PHP's `private` stops at the class; Rust's stops at the module. All code in `slug.rs` can read `Slugger.taken`; `toc.rs` can't.
-- Struct fields are private even on a `pub struct`. Mark fields `pub` (`Heading`, `Options`) or provide a constructor (`Slugger::new`): outside its module, `Slugger { taken: … }` doesn't compile. Enum variants are always as public as the enum.
-- A path is only as visible as its least visible step. `mod fence;` is private, so `is_fence` would be unreachable outside `markdown` even if it were `pub`.
-- Children see their ancestors' private items; parents don't see their children's. That's how `mod tests` reaches private functions.
-- `dead_code` warns about items that nothing uses and nothing outside the crate can reach. Items reachable from the crate root through `pub` paths are exempt, because another crate might use them. A `pub fn` inside a private module still warns.
+- `pub`: visible wherever the path can be reached
+- `pub(crate)`: this crate only
+- `pub(super)`: the parent module
+- nothing: this module and its children
 
-### One package, two crates
+```rust
+mod shop {
+    pub fn open() {}
+    fn restock() {}
+}
 
-| | Library | Binary |
-|---|---|---|
-| Root file | `src/lib.rs` | `src/main.rs` |
-| Name in paths | `modules_testing` | — |
-| Sees | its own items, following visibility | only the library's `pub` items |
+shop::open();    // ok
+shop::restock(); // error[E0603]: function `restock` is private
+```
 
-- `main.rs` is compiled as a separate crate that depends on the library, so `pub(crate)` items are invisible there.
-- Gotcha: don't write `mod cli;` in `main.rs`. It compiles `cli.rs` a second time inside the binary crate, where `crate::markdown` doesn't exist. Use `modules_testing::cli`.
-- Keep `main.rs` thin: arguments, files, stdout/stderr, exit code. Logic in the library is testable without starting a process. PHP: a console command that only delegates to a service class.
-- `fn main() -> ExitCode` hands a status code to the shell. `std::process::exit(code)` also works, but it ends the process immediately without running destructors (an unflushed `BufWriter` loses data).
-- More binaries go in `src/bin/<name>.rs`; each is its own crate using the same library.
+PHP's `private` stops at the class; Rust's stops at the module.
 
-### Three kinds of tests
+- Struct fields are private even on a `pub struct`. Mark them `pub`, or add a constructor like `Slugger::new`.
+- Children see their parent's private items. That's how `mod tests` reaches private functions.
+- A path is only as visible as its least visible step: `fence` is private, so `is_fence` can't be reached outside `markdown`.
 
-| Kind | Where | Compiled as | Can call | Run only these |
-|---|---|---|---|---|
-| Unit | `#[cfg(test)] mod tests` in each module | part of the library | private items too | `cargo test --lib` |
-| Integration | `tests/*.rs` | one crate per file | `pub` items only | `cargo test --test cli` |
-| Doc | code blocks in `///` and `//!` comments | code outside the library | `pub` items only | `cargo test --doc` |
+### Library and binary
 
-- `#[cfg(test)]` compiles the module only into the library's own unit-test binary. `cargo test` also builds the library without `cfg(test)` for `tests/`, doc tests and `main.rs`, so a `#[cfg(test)]` helper in `src/` is invisible to integration tests. PHPUnit keeps every test in `tests/`; Rust keeps unit tests next to the code, which is why they can reach private items.
-- Shared integration helpers go in `tests/common/mod.rs`, pulled in with `mod common;`. A `tests/common.rs` would be compiled as a test crate of its own.
-- `env!("CARGO_BIN_EXE_modules-testing")` is the path of the compiled binary. Cargo builds it before the integration tests, so `tests/cli.rs` can run it with `std::process::Command` — like Symfony's `Process` in a PHPUnit test. `env!("CARGO_MANIFEST_DIR")` is the crate directory, used to locate `tests/fixtures/`.
-- A test can return `Result<(), E>` and use `?`; an `Err` fails it (`tests/api.rs`).
-- `#[should_panic(expected = "…")]` expects a panic. `#[ignore]` skips a test unless you pass `-- --ignored`.
+One package holds two crates: the library (`src/lib.rs`) and the binary (`src/main.rs`). The binary is a separate crate that sees only the library's `pub` items:
+
+```rust
+// src/main.rs
+use modules_testing::cli; // not `mod cli;`
+```
+
+- `mod cli;` in `main.rs` would compile `cli.rs` a second time inside the binary, where `crate::markdown` doesn't exist.
+- Keep `main.rs` thin: arguments, files, printing, exit code. Logic goes in the library, where it's easy to test.
+- `fn main() -> ExitCode` returns the exit status: `ExitCode::SUCCESS`, `ExitCode::from(2)`.
+
+### Unit tests
+
+Unit tests live in a `#[cfg(test)] mod tests` next to the code, so they can call private items:
+
+```rust
+fn double(n: i32) -> i32 {
+    n * 2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doubles() {
+        assert_eq!(double(2), 4);
+    }
+}
+```
+
+```text
+test tests::doubles ... ok
+```
+
+`#[cfg(test)]` compiles the module only for unit tests. PHPUnit keeps every test in `tests/`; Rust keeps unit tests beside the code.
+
+### Integration tests
+
+Each file in `tests/` is a separate crate that sees only `pub` items, like any other user of your library:
+
+```rust
+// tests/api.rs
+use modules_testing::generate_toc;
+
+#[test]
+fn text_without_headings_gives_an_empty_toc() {
+    assert_eq!(generate_toc("Just a paragraph.\n", 6), "");
+}
+```
+
+- Shared helpers go in `tests/common/mod.rs`, loaded with `mod common;`. A `tests/common.rs` would become a test crate of its own.
+- `env!("CARGO_BIN_EXE_modules-testing")` is the path of the built binary, so `tests/cli.rs` can run it with `std::process::Command`.
+- `env!("CARGO_MANIFEST_DIR")` is the crate folder, used to find `tests/fixtures/`.
+- A test can return `Result` and use `?`; an `Err` fails it.
 
 ### Doc tests
 
+Code blocks in `///` comments are compiled and run as tests, from outside the crate:
+
 ```rust
-/// One-line summary.
-///
-/// # Examples
-///
 /// ```
 /// use modules_testing::markdown::slug::slugify;
 ///
@@ -110,34 +143,23 @@ pub use markdown::Heading;            // re-export: `modules_testing::Heading` n
 pub fn slugify(title: &str) -> String { … }
 ```
 
-- Every code block in a doc comment is compiled and run as a test from outside the crate, so it imports public paths. Examples can't silently go stale. They run for library crates only, not for `main.rs`.
-- Lines starting with `# ` are compiled but hidden from the rendered docs.
-- Block annotations: `text` (not Rust), `no_run` (compile only), `ignore`, `should_panic`, `compile_fail`.
-- `compile_fail` passes if compilation fails **for any reason**, typos included. `src/markdown.rs` has two that check `fence` and `MAX_LEVEL` stay hidden. Make `MAX_LEVEL` `pub` and one of them fails.
-- Edition 2024 merges doc tests into one binary where it can; `compile_fail` blocks still build alone. That's why doc tests print two result lines.
-
-PHP: phpDocumentor renders docblocks the same way, but nothing runs their examples.
+- Lines starting with `# ` run but are hidden in the docs.
+- A `compile_fail` block passes if it fails to compile for any reason, typos included. `src/markdown.rs` has two that check `fence` and `MAX_LEVEL` stay hidden.
 
 ### Running a subset
 
-| Command | Runs |
-|---|---|
-| `cargo test slug` | unit and integration tests whose name contains `slug`, such as `markdown::slug::tests::…` |
-| `cargo test --lib` | unit tests only |
-| `cargo test --test cli` | `tests/cli.rs` only |
-| `cargo test --doc` | doc tests only; `cargo test --doc slugify` filters them |
-| `cargo test --no-fail-fast` | every target, even after one fails |
-| `cargo test -- --no-capture` | also prints the `println!` output of passing tests |
-
-Arguments after `--` go to the test harness, not to Cargo. With this image's Cargo, a name filter without `--doc` skips doc tests.
+- `cargo test slug`: tests whose name contains `slug`
+- `cargo test --lib`: unit tests only
+- `cargo test --test cli`: `tests/cli.rs` only
+- `cargo test --doc`: doc tests only
+- `cargo test --no-fail-fast`: keep going after a failing target
+- `cargo test -- --no-capture`: also show `println!` output from passing tests
 
 ### `cargo doc`
 
-- `///` documents the next item; `//!` documents the enclosing module or crate (top of `lib.rs`, `markdown.rs`).
-- Contents are Markdown. Conventional sections: `# Examples`, `# Errors`, `# Panics`.
-- Intra-doc links such as ``[`Slugger`]`` or ``[`crate::markdown::slug::Slugger`]`` become hyperlinks; broken ones are warnings.
-- `cargo doc --no-deps` documents this crate but not its dependencies. Add `--document-private-items` to include private items.
-- `cargo doc --open` can't open a browser from inside Docker. Write the HTML into the lesson folder (`target/` is gitignored) from inside the container:
+`///` documents the next item; `//!` documents the module or crate it's in. Doc comments are Markdown, and ``[`Slugger`]`` becomes a link.
+
+`cargo doc --open` can't open a browser from inside Docker. Build the HTML into the lesson folder instead:
 
 ```bash
 cargo doc --no-deps --target-dir target
@@ -149,29 +171,25 @@ Then open it from the repository root on your Mac:
 open lessons/08-modules-testing/target/doc/modules_testing/index.html
 ```
 
+Add `--document-private-items` to include private items.
+
 ## Exercise
 
 Implement in this order. `cargo test --lib` gives the fastest feedback until step 7.
 
-1. `src/markdown/fence.rs`: `is_fence`. Then write the test `rejects_lines_that_are_not_fences`. `fence` is private, but its own unit tests can call it.
-2. `src/markdown.rs`: `parse_heading`, then `headings`.
-   - `trim_start_matches('#')` plus a length comparison counts the `#`s.
-   - `usize::from(MAX_LEVEL)` and `u8::try_from(count)` convert between integer types.
-   - `headings` calls the child's `pub(super)` function as `fence::is_fence(line)` and keeps an `in_fence` flag.
-3. `src/markdown/slug.rs`: `slugify` (`to_lowercase`, then `chars()`, a `match` per char, `collect()`), then `Slugger::new` and `Slugger::unique` (loop while `self.taken.contains(…)`).
-4. `src/toc.rs`: `render`. Add `use crate::markdown::slug::Slugger;` first.
-   - Compute every heading's anchor before filtering.
-   - The shallowest listed level is `Iterator::min` over the listed levels; it returns an `Option`.
-   - `"  ".repeat(n)` builds the indent.
-5. `src/lib.rs`: `generate_toc` — one line through `markdown::headings` and `toc::render`.
-6. `src/cli.rs`: `parse_args`. Import the crate-private default with `use crate::markdown::MAX_LEVEL;`. Iterate with `let mut args = args.iter(); while let Some(arg) = args.next() { … }` so `--max-level` can take its value with `args.next()`.
-7. `src/main.rs`: follow the steps in its `//!` comment. Import with `use modules_testing::…`, not `mod`. `eprintln!` writes to stderr; `ExitCode::from(2)` and `ExitCode::SUCCESS` are exit codes.
-8. `tests/cli.rs`: write `missing_file_exits_with_code_1` using the `run` helper.
-9. Generate the docs (command above) and read your crate's pages, then try `--document-private-items`.
+1. `src/markdown/fence.rs`: `is_fence`, then write the test `rejects_lines_that_are_not_fences`.
+2. `src/markdown.rs`: `parse_heading` (count `#`s with `trim_start_matches('#')` and a length comparison; convert with `usize::from(MAX_LEVEL)` and `u8::try_from(count)`), then `headings` (an `in_fence` flag and `fence::is_fence(line)`).
+3. `src/markdown/slug.rs`: `slugify` (`to_lowercase`, a `match` per char, `collect()`), then `Slugger::new` and `unique` (loop while `self.taken.contains(…)`).
+4. `src/toc.rs`: `render`. Add `use crate::markdown::slug::Slugger;`, compute every anchor before filtering, and indent with `"  ".repeat(n)` from the shallowest listed level (`Iterator::min`).
+5. `src/lib.rs`: `generate_toc`, one line through `markdown::headings` and `toc::render`.
+6. `src/cli.rs`: `parse_args`. `use crate::markdown::MAX_LEVEL;`, then `let mut args = args.iter(); while let Some(arg) = args.next() { … }` so `--max-level` can take its value with `args.next()`.
+7. `src/main.rs`: follow its `//!` steps with `use modules_testing::…`, `eprintln!`, `ExitCode::from(2)`, and `ExitCode::SUCCESS`.
+8. `tests/cli.rs`: write `missing_file_exits_with_code_1` with the `run` helper.
+9. Build the docs (command above), read your crate's pages, then try `--document-private-items`.
 
-Then run it on real files: `cargo run -- --max-level 2 ../../ROADMAP.md`.
+Then run it on a real file: `cargo run -- --max-level 2 ../../ROADMAP.md`.
 
-Optional extension: move `Slugger` into `src/markdown/slug/slugger.rs` and re-export it from `slug.rs` with `pub use`. Every test, doc test, and `toc.rs` must compile unchanged. Which `use` does `slugger.rs` need to reach `slugify`?
+Optional: move `Slugger` into `src/markdown/slug/slugger.rs` and re-export it from `slug.rs` with `pub use`; everything else must compile unchanged.
 
 ## Done when
 
@@ -179,6 +197,4 @@ Optional extension: move `Slugger` into `src/markdown/slug/slugger.rs` and re-ex
 - You can explain:
   - why `parse_args` lives in the library while `std::env::args` stays in `main.rs`
   - why `fence`'s unit tests can call `is_fence` but `tests/cli.rs` and `main.rs` can't
-  - what `pub(crate)` on `MAX_LEVEL` allows and forbids, and what the `compile_fail` doc tests do and don't prove
   - why `main.rs` imports `modules_testing::cli` instead of declaring `mod cli;`
-  - why the shared helpers live in `tests/common/mod.rs`, not `tests/common.rs`

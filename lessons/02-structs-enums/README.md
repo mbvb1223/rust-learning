@@ -1,6 +1,6 @@
 # Lesson 02 — Model data
 
-Build a money type and an order state machine: implement every `todo!()` in `src/lib.rs` until the tests pass.
+Build a money type and an order state machine in `src/lib.rs`.
 
 ## Run
 
@@ -13,96 +13,179 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.
+Don't run `cargo fix`.
 
 ## Notes
 
-### Structs and `impl`
+### Structs
+
+A struct groups named fields. Fields are private to their module unless marked `pub`.
 
 ```rust
-pub struct Money {
-    minor: i64,          // private: only code in this module can read it
-    currency: Currency,
+struct Point {
+    x: i32,
+    y: i32,
 }
 
-impl Money {
-    pub fn new(minor: i64, currency: Currency) -> Self { // associated function ≈ static named constructor
-        Self { minor, currency }                         // field init shorthand
+let p = Point { x: 1, y: 2 };
+println!("{}", p.x); // 1
+```
+
+### Methods with `impl`
+
+Behaviour goes in an `impl` block. A function without `self` is called with `::`, like a static constructor; a method takes `&self`, like a read-only `$this`.
+
+```rust
+impl Point {
+    fn new(x: i32, y: i32) -> Self {
+        Self { x, y } // shorthand for Self { x: x, y: y }
     }
 
-    pub fn minor(&self) -> i64 { self.minor }            // method; `&self` ≈ read-only `$this`
+    fn sum(&self) -> i32 {
+        self.x + self.y
+    }
 }
 
-let price = Money::new(1250, Currency::Eur);             // `::` for associated functions
-price.minor();                                           // `.` for methods
+let p = Point::new(1, 2);
+println!("{}", p.sum()); // 3
 ```
 
-- A struct holds data only; behaviour goes in `impl` blocks. There is no inheritance and no constructor keyword.
-- A struct is a **value**, not an object handle. Lesson 03 explains what happens when you pass one around.
-- `self` (by value) vs `&self` (borrowed) is covered in lesson 03. Here every type is `Copy`, so both work.
+- No inheritance and no constructor keyword: `new` is just a convention.
+- Some stubs take `self`, others `&self`. Both work here because every type in this lesson is `Copy` (lesson 03).
 
-### Enums with data
+### Enums
+
+An enum has a fixed set of variants, and each variant can carry its own data:
 
 ```rust
-pub enum OrderState {
-    Pending,
-    Paid { amount: Money },
-    Shipped { amount: Money, tracking: u64 },
+enum Shape {
+    Square { side: f64 },
+    Rect { w: f64, h: f64 },
+    Empty,
 }
+
+let s = Shape::Rect { w: 2.0, h: 3.0 };
 ```
 
-PHP 8.1 enum cases can't carry per-case data. The closest PHP model is a sealed abstract class with one final subclass per case. Rust enums hold different data per variant, and the compiler knows every variant.
+PHP enum cases can't carry per-case data; the closest PHP model is a sealed class hierarchy.
 
 ### `match`
 
-```rust
-match state {
-    OrderState::Pending => "pending",
-    OrderState::Paid { amount } => …,                 // destructure fields
-    OrderState::Shipped { tracking, .. } => …,        // `..` ignores the rest
-}
-
-match state {
-    OrderState::Pending if amount.minor() > 0 => …,   // guard
-    OrderState::Pending | OrderState::Paid { .. } => …,
-    _ => …,                                           // catch-all
-}
-```
-
-- `match` is **exhaustive at compile time**: a missing variant is a compile error. PHP's `match` throws `UnhandledMatchError` at runtime.
-- On your own enums, avoid `_ =>` where every case matters. Without it, adding a variant makes the compiler point at every `match` that needs updating.
-
-### `Option<T>` instead of `null`
+`match` runs the first arm whose pattern fits, and can pull fields out of the variant:
 
 ```rust
-let maybe: Option<Money> = state.amount();   // Some(money) or None
-
-if let Some(amount) = maybe {                // run one branch only on a match
-    println!("{}", amount.format());
-}
-
-let Some(amount) = maybe else {              // let-else: bind or leave early
-    return None;
+let area = match s {
+    Shape::Square { side } => side * side,
+    Shape::Rect { w, h } => w * h,
+    Shape::Empty => 0.0,
 };
+println!("{area}"); // 6
 ```
 
-- `?Money` + `null` becomes `Option<Money>`. You can't use the inner value without handling `None`.
-- Inside a function that returns `Option`, `value?` returns `None` early. Lesson 05 covers `?` in depth.
-- Trap: PHP's `??` is lazy, but `opt.unwrap_or(expensive())` always calls `expensive()`. Use `opt.unwrap_or_else(|| expensive())`.
+`match` is exhaustive: leave out a variant and it doesn't compile. PHP's `match` only throws `UnhandledMatchError` at runtime.
+
+### More patterns
+
+```rust
+let label = match s {
+    Shape::Square { side } if side > 10.0 => "big square",
+    Shape::Square { .. } | Shape::Rect { .. } => "box",
+    _ => "nothing",
+};
+println!("{label}"); // box
+```
+
+- `if …` after a pattern is a guard.
+- `|` combines patterns into one arm.
+- `..` ignores the remaining fields.
+- `_` matches anything else. Avoid it on your own enums: without it, a new variant makes the compiler point at every `match` to update.
+
+### `Option` instead of `null`
+
+`Option<T>` is either `Some(value)` or `None`. It replaces `?Type` and `null`, and you can't use the value without handling `None`.
+
+```rust
+let found: Option<i32> = Some(5);
+match found {
+    Some(n) => println!("got {n}"), // got 5
+    None => println!("nothing"),
+}
+```
+
+### `if let` and `let … else`
+
+`if let` runs a block only when one pattern matches:
+
+```rust
+if let Some(n) = found {
+    println!("{n}"); // 5
+}
+```
+
+`let … else` binds the value or leaves early:
+
+```rust
+fn double(found: Option<i32>) -> Option<i32> {
+    let Some(n) = found else {
+        return None;
+    };
+    Some(n * 2)
+}
+
+println!("{:?}", double(Some(5))); // Some(10)
+```
+
+In a function that returns `Option`, `let n = found?;` does the same in one step (lesson 05).
 
 ### Derives
 
+`#[derive(…)]` adds standard behaviour to a type:
+
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+let p = Point { x: 1, y: 2 };
+println!("{p:?}");                        // Point { x: 1, y: 2 }
+println!("{}", p == Point { x: 1, y: 2 }); // true
 ```
 
-- `Debug` enables `{:?}` printing; `assert_eq!` needs it.
-- `PartialEq`/`Eq` enable `==`.
-- `Clone`/`Copy` let a value be used again after passing it by value. Lesson 03 explains them.
+- `Debug`: print with `{:?}`. `assert_eq!` needs it.
+- `PartialEq`, `Eq`: compare with `==`.
+- `Clone`, `Copy`: reuse a value after passing it by value (lesson 03).
 
 ### Money in minor units
 
-Never store money as a float (`0.1 + 0.2 != 0.3`). Store integer minor units (cents), like `moneyphp/money` or `brick/money` do. Arithmetic uses `i64::checked_add` / `checked_sub` / `checked_mul`, which return `None` on overflow instead of panicking.
+Never store money as a float. Store whole cents in an integer, like `moneyphp/money` does.
+
+```rust
+println!("{}", 0.1 + 0.2); // 0.30000000000000004
+let price: i64 = 1250;     // 12.50 EUR
+```
+
+### Checked arithmetic
+
+`checked_add`, `checked_sub`, and `checked_mul` return `None` on overflow instead of panicking:
+
+```rust
+println!("{:?}", 5_i64.checked_add(1));    // Some(6)
+println!("{:?}", i64::MAX.checked_add(1)); // None
+```
+
+### Zero-padding
+
+`format!` builds a `String`, like `sprintf`. `{n:0width$}` pads `n` with zeros to `width` digits:
+
+```rust
+let n = 5;
+println!("{n:02}"); // 05
+
+let s = format!("{n:0width$}", width = 3);
+println!("{s}");    // 005
+```
 
 ## Exercise
 
@@ -112,20 +195,17 @@ Part A — `Money`:
 2. `Money::new`, `minor`, `currency`.
 3. `Money::from_major`: `10_i64.pow(decimals)` and `checked_mul`.
 4. `checked_add` / `checked_sub`: `None` on mixed currencies or overflow.
-5. `format`: `"12.50 EUR"`, `"-0.05 EUR"`, `"1250 JPY"`.
-   - Watch the sign of amounts under one unit.
-   - `i64::unsigned_abs()` helps.
-   - `format!("{n:0width$}", width = 2)` zero-pads.
+5. `format`: `"12.50 EUR"`, `"-0.05 EUR"`, `"1250 JPY"`. Watch the sign of amounts under one unit; `i64::unsigned_abs()` helps.
 
 Part B — `OrderState`:
 
-6. `pay`, `ship`, `deliver`, `cancel`: return `None` for any transition the type's doc comment doesn't allow. Use guards and `|` patterns.
+6. `pay`, `ship`, `deliver`, `cancel`: `None` for any transition the type's doc comment doesn't allow. Use guards and `|` patterns.
 7. `amount`: one `match` with combined arms.
 8. `tracking`: `if let`.
 9. `label`: an exhaustive `match` with no `_` arm.
 10. `refund`: start with `let … else`.
 
-Optional extension: add a `Refunded { amount: Money }` variant and let the compiler errors guide every `match` that needs updating. Decide which transitions lead to it, and add tests.
+Optional: add a `Refunded { amount: Money }` variant, let the compiler errors show every `match` to update, and add tests.
 
 ## Done when
 

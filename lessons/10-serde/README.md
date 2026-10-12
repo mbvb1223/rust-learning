@@ -1,6 +1,6 @@
 # Lesson 10 — JSON with Serde
 
-Parse task API request bodies into validated types and serialize responses: add the missing `#[serde(...)]` attributes and implement every `todo!()` in `src/lib.rs` until the tests pass.
+Parse task API request bodies into validated types and serialize responses: add the missing `#[serde(...)]` attributes and implement every `todo!()` in `src/lib.rs`.
 
 ## Run
 
@@ -13,196 +13,273 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.
-
-The package is named `serde-lesson`, not `serde`, so its library name doesn't collide with the `serde` dependency.
+Don't run `cargo fix`. The package is named `serde-lesson` so it doesn't clash with the `serde` dependency.
 
 ## Notes
 
-### Serde and serde_json
+### Serialize and Deserialize
 
-```bash
-cargo add serde --features derive   # the framework: Serialize/Deserialize traits + derive macros
-cargo add serde_json                # one format; TOML, YAML, CSV crates plug into the same traits
-```
+Derive `Serialize` and `Deserialize`, and `serde_json` can turn a struct into JSON and back.
 
 ```rust
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
-pub struct Task {
-    pub id: i64,
-    pub title: String,
-    pub completed: bool,
+#[derive(Debug, Serialize, Deserialize)]
+struct Task {
+    id: i64,
+    title: String,
+    completed: bool,
 }
 
-let task: Task = serde_json::from_str(body)?;     // decode + hydrate + type-check in one step
-let json: String = serde_json::to_string(&task)?; // {"id":1,"title":"Buy milk","completed":false}
+let task: Task = serde_json::from_str(r#"{"id": 1, "title": "Buy milk", "completed": false}"#)?;
+println!("{}", task.title);                    // Buy milk
+println!("{}", serde_json::to_string(&task)?); // {"id":1,"title":"Buy milk","completed":false}
 ```
 
-| serde_json | PHP |
-|---|---|
-| `from_str::<T>(&str)`, `from_slice` | `json_decode($s, true)` + hand-written hydration and checks |
-| `to_string(&v)`, `to_string_pretty` | `json_encode($v)`, `JSON_PRETTY_PRINT` |
-| `Value`, `json!({"a": 1})` | an untyped assoc array |
-| `to_value(&v)`, `from_value::<T>(value)` | convert between typed and untyped |
+`from_str` does PHP's `json_decode`, the hydration into an object, and the type checks in one step.
 
-- The derive generates code at compile time; there is no runtime reflection. `Serialize` ≈ `JsonSerializable`. PHP has no built-in inverse; `Deserialize` replaces `$data['title'] ?? null` plus `is_string()` checks.
-- Serialization ignores Rust visibility: private fields are written too.
-- Serde is strict where `json_decode` is loose: `"42"` is not an `i64`, `1.0` is not an `i64`, and `null` is not a `String`. Each is an error before your code runs.
-- Tests compare `serde_json::to_value(&x)` with `json!(…)`. `Value` objects compare as maps, so key order doesn't matter; raw string comparison would depend on it.
+### Strict types
 
-### Shape first, then rules
+Each JSON value must match its field's type, or `from_str` returns an error before your code runs.
+
+```rust
+serde_json::from_str::<Task>(r#"{"id": "1", "title": "Buy milk", "completed": false}"#)
+// Err: invalid type: string "1", expected i64 at line 1 column 10
+```
+
+- `"1"` is not an `i64`, and `null` is not a `String`.
+- A missing key is an error, unless the field is an `Option` or has `#[serde(default)]`.
+- An unknown key is silently ignored.
+
+### Comparing JSON in tests
+
+`serde_json::to_value` turns a value into a `serde_json::Value`, and `json!` builds one by hand. Objects compare as maps, so key order doesn't matter.
+
+```rust
+use serde_json::json;
+
+let value = serde_json::to_value(&task)?;
+assert_eq!(value, json!({"completed": false, "id": 1, "title": "Buy milk"})); // passes
+```
+
+### Renaming keys
+
+`rename` changes one field's JSON key. `rename_all` on the struct changes every key. Both work in both directions.
+
+```rust
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Report {
+    task_id: i64,
+    #[serde(rename = "error")]
+    message: String,
+}
+
+let report = Report { task_id: 7, message: "task not found".to_string() };
+println!("{}", serde_json::to_string(&report)?); // {"taskId":7,"error":"task not found"}
+```
+
+Struct attributes go below `#[derive]`; field attributes go on the field.
+
+### Rejecting unknown keys
+
+`#[serde(deny_unknown_fields)]` on the struct turns an unknown key into an error.
 
 ```rust
 #[derive(Deserialize)]
-pub struct CreateTaskInput { pub title: String }  // shape: serde checks it
-
-pub struct NewTask { title: String }              // rules: private field, built only via TryFrom
-
-impl TryFrom<CreateTaskInput> for NewTask {
-    type Error = ValidationError;
-    fn try_from(input: CreateTaskInput) -> Result<Self, Self::Error> { … }
+#[serde(deny_unknown_fields)]
+struct Signup {
+    email: String,
 }
 
-let new_task = NewTask::try_from(input)?;         // or `let new_task: NewTask = input.try_into()?;`
+serde_json::from_str::<Signup>(r#"{"email": "a@b.c", "admin": true}"#)
+// Err: unknown field `admin`, expected `email` at line 1 column 26
 ```
 
-- Serde answers "is this the right shape?". Domain rules (trimmed, 1–200 chars) are your code.
-- Because `NewTask`'s `title` field is private and `try_from` is the only constructor, a `NewTask` with a bad title can't exist. Code that receives one doesn't re-check. This is "parse, don't validate".
-- PHP equivalent: a request DTO plus a value object with a private constructor and a static factory that throws. Here the failure is an `Err` in the signature, and the caller can't reach the value without handling it.
-- `TryFrom` is lesson 09's fallible conversion trait. Implementing it gives you `try_into()` for free.
+### Default values
 
-### Attributes
+`#[serde(default)]` on a field turns a missing key into the type's default: `false`, `0`, `""`, an empty `Vec`.
 
-Container attributes go on the struct, below `#[derive]`; field attributes go on the field. Combine them in one: `#[serde(default, skip_serializing_if = "…")]`.
+```rust
+#[derive(Deserialize)]
+struct Settings {
+    name: String,
+    #[serde(default)]
+    dark_mode: bool,
+}
 
-| Attribute | Where | Effect |
-|---|---|---|
-| `rename = "error"` | field | The JSON key differs from the Rust name, in both directions |
-| `rename_all = "camelCase"` | container | `task_id` ↔ `taskId` for every field. Also `"snake_case"`, `"kebab-case"`, `"SCREAMING_SNAKE_CASE"`, … |
-| `deny_unknown_fields` | container | An unknown key is an error. By default it is silently ignored |
-| `default` | field | A missing key becomes `Default::default()`: `false`, `0`, `""`, empty `Vec` |
-| `default = "path::to_fn"` | field | A missing key becomes `to_fn()` |
-| `default` | container | Missing fields come from the struct's own `Default` impl |
-| `skip_serializing_if = "Option::is_none"` | field | Omit the key when the predicate returns `true` |
-| `skip` | field | Never written; deserializing fills it with `Default::default()` |
-
-Gotcha: a derived struct also deserializes from a JSON **array** of its field values in order. `[null, true]` is a valid `UpdateTaskInput`. `deny_unknown_fields` doesn't change that.
+let s: Settings = serde_json::from_str(r#"{"name": "Ana"}"#)?;
+println!("{}", s.dark_mode); // false
+```
 
 ### Optional fields
 
-| JSON | `title: Option<String>` |
-|---|---|
-| key missing | `None`. No `#[serde(default)]` needed |
-| `"title": null` | `None` |
-| `"title": "Walk"` | `Some("Walk")` |
+An `Option<T>` field needs no attribute to deserialize:
 
-- Serializing `None` writes `"title": null` unless the field has `skip_serializing_if = "Option::is_none"`. `UpdateTaskInput` derives `Serialize` so a Rust client, such as an API test, can build `PATCH` bodies from it. Sending only the changed keys is what makes it a partial update.
-- PHP can tell "missing" from `null` with `array_key_exists`. A plain `Option<T>` can't (see the extension).
+```text
+{}                  → title: None
+{"title": null}     → title: None
+{"title": "Walk"}   → title: Some("Walk")
+```
 
-### Borrow in responses, own in requests
+When serializing, `None` becomes `null`. `skip_serializing_if = "Option::is_none"` leaves the key out instead:
+
+```rust
+#[derive(Serialize)]
+struct Profile {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nickname: Option<String>,
+}
+
+let p = Profile { name: "Ana".to_string(), nickname: None };
+println!("{}", serde_json::to_string(&p)?); // {"name":"Ana"}
+// without the attribute:                      {"name":"Ana","nickname":null}
+```
+
+PHP can tell a missing key from `null` with `array_key_exists`; a plain `Option` can't.
+
+### Shape first, then rules
+
+Serde checks the shape. Domain rules, like "1–200 characters after trimming", are your code. Put them in a `TryFrom` that builds a type with a private field:
+
+```rust
+pub struct Email(String); // private field: `try_from` is the only way in
+
+impl TryFrom<String> for Email {
+    type Error = String;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        if raw.contains('@') {
+            Ok(Email(raw))
+        } else {
+            Err(format!("not an email: {raw}"))
+        }
+    }
+}
+
+Email::try_from("ana@example.com".to_string()); // Ok(Email("ana@example.com"))
+Email::try_from("ana".to_string());             // Err("not an email: ana")
+```
+
+An invalid `Email` can't exist, so code that receives one never checks again. In PHP: a value object with a private constructor and a static factory that throws.
+
+### Borrowing in responses
+
+A struct that is only serialized can borrow its data, so building a response doesn't clone anything.
 
 ```rust
 #[derive(Serialize)]
 pub struct TaskList<'a> {
-    tasks: &'a [Task], // borrowed from the store, not cloned
+    tasks: &'a [Task], // borrowed from the caller
     count: usize,
 }
 ```
 
-- `Serialize` only reads, so a response struct can borrow (lesson 07). The `'a` says a `TaskList` can't outlive the tasks it points at.
-- Input structs own their data (`String`, not `&str`). A JSON string with an escape such as `"a\nb"` must be decoded into new memory, so a `&'de str` field fails on it: `invalid type: string "a\nb", expected a borrowed string`.
+Request structs own their data (`String`, not `&str`), because a JSON string like `"a\nb"` must be decoded into new memory.
 
 ### serde_json errors
 
+A `serde_json::Error` has a message, a position, and a category.
+
 ```rust
 let err = serde_json::from_str::<CreateTaskInput>(r#"{"title": 42}"#).unwrap_err();
-err.to_string(); // "invalid type: integer `42`, expected a string at line 1 column 12"
-err.line();      // 1
-err.column();    // 12
-err.classify();  // Category::Data   (also Syntax, Eof, Io)
+println!("{err}");                // invalid type: integer `42`, expected a string at line 1 column 12
+println!("{}", err.line());       // 1
+println!("{}", err.column());     // 12
+println!("{:?}", err.classify()); // Data
 ```
 
-| `Category` | Meaning |
-|---|---|
-| `Syntax` | Not JSON: `{"title": yes}`, trailing comma, trailing characters |
-| `Eof` | Input ended mid-value: `""`, `{"title": "a` |
-| `Data` | Valid JSON that doesn't fit the type: wrong type, missing or unknown field, `true` instead of an object |
-| `Io` | The reader failed. Only `from_reader` produces it |
+`err.classify()` returns a `serde_json::error::Category`:
 
-- `serde_json::Error` is neither `Clone` nor `PartialEq`. Copy what you need (message, line, column) into your own enum; then you can derive both and compare errors in tests.
-- `?` converts the error through `From`. With `From<serde_json::Error>` and `From<ValidationError>` implemented for `ApiError`, one function can `?` both. PHP equivalent: catching `JsonException` and rethrowing a domain exception, except here it's visible in the signature.
+- `Syntax`: not JSON, e.g. `{"title": yes}` or a trailing comma
+- `Eof`: the input ended too early, e.g. `""`
+- `Data`: valid JSON of the wrong shape: wrong type, missing or unknown field
+- `Io`: the reader failed (only `from_reader` does this)
 
-| Failure | Status | Body |
-|---|---|---|
-| Not JSON: `Syntax`, `Eof` (and `Io`) | 400 | `{"error": "malformed JSON: …"}` |
-| Valid JSON, wrong shape: `Data` | 422 | `{"error": "invalid body: …"}` |
-| A domain rule: blank or too-long title, empty update | 422 | `{"error": "title must not be empty"}` |
-| Unknown task | 404 | `{"error": "task not found"}` |
+`serde_json::Error` is neither `Clone` nor `PartialEq`, so copy its message, line, and column into your own enum.
 
-This lesson uses the same split as Axum's `Json` extractor (lessons 12 and 14), so a body gets the same status everywhere: 400 means "I couldn't read it", 422 means "I read it and it's wrong". `{"completed": yes}` is 400; `{"completed": "yes"}` is 422.
+### 400 or 422
+
+Every failure becomes a status and an `{"error": "…"}` body:
+
+- 400: not JSON (`Syntax`, `Eof`, `Io`) → `malformed JSON: …`
+- 422: valid JSON, wrong shape (`Data`) → `invalid body: …`
+- 422: a domain rule failed → `title must not be empty`
+- 404: unknown task → `task not found`
+
+So `{"completed": yes}` is 400 and `{"completed": "yes"}` is 422, the same split as Axum's `Json` extractor in lessons 12 and 14.
+
+### `?` converts errors
+
+`?` passes the error through `From`. Implement `From<TheirError> for YourError`, and `?` converts it for you:
+
+```rust
+impl From<ParseIntError> for AppError {
+    fn from(err: ParseIntError) -> Self {
+        AppError::BadNumber(err.to_string())
+    }
+}
+
+fn parse_age(s: &str) -> Result<u8, AppError> {
+    let age = s.parse::<u8>()?; // a ParseIntError becomes an AppError
+    Ok(age)
+}
+```
+
+### Option helpers
+
+- `as_deref()` turns `Option<String>` into `Option<&str>`.
+- `transpose()` turns `Option<Result<T, E>>` into `Result<Option<T>, E>`, ready for `?`.
+
+```rust
+let n: Option<i32> = Some("42").map(|s| s.parse::<i32>()).transpose()?;
+println!("{n:?}"); // Some(42)
+
+let title = Some("Walk".to_string());
+println!("{:?}", title.as_deref()); // Some("Walk")
+```
 
 ### Counting characters
 
-- `str::len()` counts bytes, like PHP's `strlen`. `chars().count()` counts Unicode scalar values, close to `mb_strlen`. `"é".len()` is 2. The title limit counts chars.
-- `str::trim` strips Unicode whitespace, including the non-breaking space `U+00A0`. PHP's `trim()` only strips ASCII ` \t\n\r\0\x0B`. The sets aren't nested: `str::trim` does not strip `\0`, which PHP's `trim()` does.
+`len()` counts bytes, like PHP's `strlen`. `chars().count()` counts characters, like `mb_strlen`.
+
+```rust
+let s = "  é  ".trim();
+println!("{}", s.len());           // 2
+println!("{}", s.chars().count()); // 1
+```
 
 ## Exercise
 
-Steps 1–4 are attributes only. Until the attribute is right, their tests fail with assertion or `unwrap` panics, not `todo!()`. The `LegacyTask` tests then stop at step 5's `todo!()`.
+Steps 1–4 are attributes only; until each is right, its tests fail with assertion or `unwrap` panics, not `todo!()`.
 
 Part A — wire format:
 
 1. `ErrorBody`: the field is `message`, the JSON key is `error`.
 2. `CreateTaskInput`: reject unknown keys.
 3. `UpdateTaskInput`: reject unknown keys, and omit `None` fields when serializing (one attribute per field).
-4. `LegacyTask`: one container attribute for the camelCase keys, one field attribute for the optional `isDone`.
-5. `From<LegacyTask> for Task`, then `TaskList::new`.
+4. `LegacyTask`: one struct attribute for the camelCase keys, one field attribute so a missing `isDone` is `false`.
+5. `From<LegacyTask> for Task`, then `TaskList::new` (`count` is `tasks.len()`).
 
 Part B — validation:
 
-6. `validate_title`: `trim`, then `chars().count()`. Return an owned `String`.
-7. `Display` for `ValidationError`: `match self` and `write!(f, …)`. Use `MAX_TITLE_CHARS` in the message, not a literal `200`.
-8. `NewTask`: `try_from`, `title`, `into_task`. `into_task(self, …)` takes ownership, so the title moves into the `Task` without a clone.
-9. `TaskPatch`: `try_from`, `title`, `completed`, `apply`.
-   - Check `EmptyUpdate` first.
-   - `input.title.map(|t| validate_title(&t))` is an `Option<Result<…>>`; `.transpose()` turns it into `Result<Option<…>>`, ready for `?`.
-   - `title()` returns `Option<&str>` from an `Option<String>`: `as_deref()`.
+6. `validate_title`: `trim`, then `chars().count()`; return an owned `String`.
+7. `Display` for `ValidationError`: `match self` and `write!(f, …)`, using `MAX_TITLE_CHARS`, not `200`.
+8. `NewTask`: `try_from`, `title`, `into_task`. `into_task(self, …)` moves the title into the `Task` without a clone.
+9. `TaskPatch`: check `EmptyUpdate` first, then `input.title.map(|t| validate_title(&t)).transpose()?`; `title()` uses `as_deref()`.
 
 Part C — errors:
 
-10. `From<serde_json::Error>` and `From<ValidationError>` for `ApiError`, then `status`, `Display`, and `body` (reuse `Display` with `self.to_string()`).
-    - `use serde_json::error::Category;`, then `match err.classify()`: `Data` → `InvalidBody`, the other three → `MalformedJson`.
-    - Read `to_string()`, `line()`, and `column()` once, before the `match`; both arms use them.
-11. `parse_create`, `parse_update`: `serde_json::from_str` into the raw input, then `try_from`. Two lines each, using `?`.
+10. `ApiError`: both `From` impls (`match err.classify()`: `Category::Data` → `InvalidBody`, the rest → `MalformedJson`), then `status`, `Display`, and `body` (`self.to_string()`).
+11. `parse_create`, `parse_update`: `serde_json::from_str` into the raw input, then `try_from`, two lines each with `?`.
 
-Optional extension — absent versus `null`. `PATCH` can't clear a value yet, because a missing key and `null` both become `None`. Add a nullable note:
-
-- `Task`: `note: Option<String>` with `skip_serializing_if = "Option::is_none"`, so tasks without a note keep the contract's JSON. Fix each `Task { … }` the compiler points at.
-- `UpdateTaskInput` and `TaskPatch`: `note: Option<Option<String>>`. `None` = leave unchanged, `Some(None)` = clear, `Some(Some(text))` = set. Count it in the `EmptyUpdate` check.
-- A plain `Option<Option<T>>` still turns `null` into the outer `None`. Serde calls a `deserialize_with` function only when the key is present:
-
-```rust
-fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(de).map(Some)
-}
-
-#[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
-pub note: Option<Option<String>>,
-```
-
-`default` is required: with `deserialize_with`, a missing key is otherwise a `missing field` error. Add tests for all three cases. The `serde_with` crate ships the same helper as `serde_with::rust::double_option`.
+Optional: add a nullable `note` that `PATCH` can clear, as `Option<Option<String>>` with `#[serde(default, deserialize_with = …)]` (see `serde_with::rust::double_option`), with tests for missing, `null`, and a value.
 
 ## Done when
 
 - `cargo test`, `cargo fmt --check`, and `cargo clippy --all-targets -- -D warnings` pass.
 - You can explain:
   - why `CreateTaskInput` and `NewTask` are separate types, and why `NewTask`'s field is private
-  - why `TaskList` can borrow its tasks but `CreateTaskInput` owns its `String`
   - which bodies produce 400 and which produce 422, and where `?` converts one error type into another
   - what a missing key, `null`, and `skip_serializing_if` each do to an `Option` field

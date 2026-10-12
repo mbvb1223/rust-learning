@@ -1,6 +1,6 @@
 # Lesson 03 — Ownership and borrowing
 
-Fix seven borrow-checker errors in `src/broken.rs`, then build a shopping cart: implement every `todo!()` in `src/lib.rs` until the tests pass.
+Fix seven borrow-checker errors in `src/broken.rs`, then build a shopping cart in `src/lib.rs`.
 
 ## Run
 
@@ -15,155 +15,147 @@ cargo fmt --check
 cargo clippy --all-targets --features broken -- -D warnings
 ```
 
-`src/broken.rs` is compiled only with `--features broken` (the `[features]` table in `Cargo.toml` plus `#[cfg(feature = "broken")]` in `lib.rs`). Plain `cargo test` runs Part B even while Part A doesn't compile.
-
-Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.
+`src/broken.rs` only compiles with `--features broken`, so plain `cargo test` works while it's still broken. Don't run `cargo fix`.
 
 ## Notes
 
-### Ownership and moves
+### Ownership
 
-Every value has exactly one owner: a variable, a struct field, a slot in a `Vec`. When the owner goes out of scope, the value is dropped. Assigning or passing a non-`Copy` value **moves** it; the old name becomes unusable at compile time.
+Every value has one owner. When the owner goes out of scope, the value is dropped (freed).
+
+Assigning a `String` **moves** it. The old variable can't be used anymore:
 
 ```rust
 let a = String::from("milk");
-let b = a;                 // move: `b` owns the string now
-println!("{a}");           // error[E0382]: borrow of moved value: `a`
-
-fn consume(s: String) {}   // a by-value parameter takes ownership
-consume(b);                // `b` moves into the call and is dropped when `consume` returns
+let b = a;
+println!("{b}");    // milk
+// println!("{a}"); // error[E0382]: borrow of moved value: `a`
 ```
 
-| | PHP | Rust |
-|---|---|---|
-| `$b = $a` (string, array) | copy-on-write copy; both usable | move; `a` unusable |
-| `$b = $a` (object) | two handles to one object, refcount 2 | move; still exactly one owner |
-| `f($a)` | callee gets a copy or a handle; caller keeps `$a` | callee owns it; pass `&a` to lend it instead |
-| Freed when | refcount hits 0, or the cycle collector runs | the owner's scope ends; decided at compile time |
+PHP would copy the string here. Rust has no garbage collector, so exactly one variable owns the value and frees it.
 
-Where the PHP picture breaks: Rust keeps no reference count at run time and has no garbage collector. The compiler knows the single owner, so it inserts the cleanup itself. Shared ownership (`Rc`, `Arc`) is opt-in; `Arc` arrives in lesson 12.
+Passing a value to a function moves it too:
 
-### Stack, heap, and why a move invalidates
+```rust
+fn consume(s: String) {}
 
-A `String` is three machine words — pointer, capacity, length — and the bytes live on the heap. `Vec<T>` has the same shape.
-
-```text
-stack                      heap
-a: [ptr | cap 4 | len 4] ──► m i l k
+let s = String::from("bread");
+consume(s);
+// println!("{s}"); // error: `s` was moved into `consume`
 ```
 
-`let b = a;` copies the three words, never the heap bytes. If `a` stayed usable, both would free the same buffer at scope end (a double free). Rust forbids using `a` instead, so a move is a cheap shallow copy plus a compile-time rule.
+### Copy and clone
 
-### `Copy` and `Clone`
+Simple types (integers, floats, `bool`, `char`) are **copied** instead of moved:
 
-- **`Copy`** types are duplicated bit-for-bit, and the original stays usable: integers, floats, `bool`, `char`, shared references `&T`, and tuples/arrays of `Copy` types. Your own type opts in with `#[derive(Clone, Copy)]`, as lesson 02's `Money` did.
-- A type that owns heap data (`String`, `Vec`, any struct holding one) can't be `Copy`. **`.clone()`** makes an explicit deep copy.
-- PHP's `clone $cart` is shallow: nested objects stay shared unless you write `__clone`. Rust's derived `Clone` clones every field, so a cloned `Cart` shares nothing with the original.
-- Clone when you really need a second, independent value. A clone added only to silence the borrow checker usually hides a better fix.
+```rust
+let x = 5;
+let y = x;
+println!("{x} {y}"); // 5 5
+```
 
-### Scope and drop order
+To copy a `String` or `Vec`, call `.clone()`:
 
-`Noisy(&'static str)` stands for any type whose drop is observable: it prints its name when dropped (a custom `Drop` impl, an advanced topic).
+```rust
+let a = String::from("milk");
+let b = a.clone();
+println!("{a} {b}"); // milk milk
+```
+
+Clone only when you really need a second copy. Borrowing is usually the better fix.
+
+### Scope and drop
+
+A value is dropped at the end of its scope. Variables in the same scope are dropped in **reverse** order.
 
 ```rust
 {
-    let a = Noisy("a");
-    let b = Noisy("b");
-    let c = Noisy("c");
-    drop(c);                       // dropped now: `drop` takes ownership and returns nothing
-    let _ = Noisy("ignored");      // `_` doesn't bind: dropped immediately
-    let n = Noisy("temp").0.len(); // temporary: dropped at the end of this statement
-}                                  // then `b`, then `a`
+    let a = String::from("a");
+    let b = String::from("b");
+} // b dropped, then a
 ```
 
-- Locals are dropped at the end of their scope in **reverse** declaration order. A struct's fields drop in declaration order; a `Vec` drops its elements first to last.
-- A moved-from variable is not dropped again; the new owner is responsible.
-- `let _guard = …` keeps the value until scope end; `let _ = …` drops it at once.
-- PHP's `__destruct` usually runs at a similar point, but objects in reference cycles wait for the cycle collector. Rust drop points are known at compile time. Rust still doesn't promise that every destructor runs (`std::mem::forget`, leaked `Rc` cycles, aborts), so never rely on `Drop` for memory safety. Custom `Drop` impls are an advanced topic.
+- `drop(x)` drops a value early.
+- A temporary (a value not stored in a variable) is dropped at the end of its statement.
+- `let _ = value;` drops at once; `let _guard = value;` keeps it until the scope ends.
 
-### Borrowing: `&T` and `&mut T`
+### Borrowing
 
-A reference borrows a value without owning it. The rule, checked at compile time:
+`&value` lends a value without moving it. The owner keeps it:
 
-> At any point, a value has **either** any number of shared borrows `&T` **or** exactly one exclusive borrow `&mut T`. No borrow outlives the owner.
+```rust
+fn length(s: &String) -> usize {
+    s.len()
+}
+
+let s = String::from("milk");
+println!("{}", length(&s)); // 4
+println!("{s}");            // milk
+```
+
+`&mut value` lends it with permission to change it:
+
+```rust
+fn add_one(n: &mut i32) {
+    *n += 1;
+}
+
+let mut count = 1;
+add_one(&mut count);
+println!("{count}"); // 2
+```
+
+### The borrowing rule
+
+At any time a value has **either** many `&` borrows **or** one `&mut` borrow, never both.
 
 ```rust
 let mut v = vec![1, 2];
-let first = &v[0];   // shared borrow starts
-v.push(3);           // needs `&mut v` while `first` is alive
-println!("{first}"); // `first` used here, so it was alive at the push
+let first = &v[0];
+v.push(3); // error[E0502]: `v` is still borrowed by `first`
+println!("{first}");
 ```
 
-`push` may reallocate the buffer and leave `first` pointing at freed memory. Delete the `println!` and it compiles: a borrow lasts until its **last use**, not to the end of the block (non-lexical lifetimes).
+`push` may move the vector's data, so `first` would point at freed memory. A borrow ends at its last use: move the `println!` above the `push` and it compiles.
 
-- PHP references (`$b = &$a`) are aliases: two names, both may write, no rules. Rust references are checked loans. PHP's copy-on-write means mutating an array inside its own `foreach` is legal there; in Rust it's a compile error.
-- `&T` is `Copy`; `&mut T` is not. Method calls borrow automatically: `v.push(3)` is `Vec::push(&mut v, 3)`, and `item.name` reads through `&LineItem` without `*`.
-- `for x in v` consumes `v`; `for x in &v` yields `&T`; `for x in &mut v` yields `&mut T`.
+PHP's `foreach` iterates over a copy, so changing an array inside its own loop works there. In Rust it's a compile error.
 
-### Reading a borrow-checker diagnostic
+### Loops and ownership
 
-The snippet above, inside `fn main`, produces:
-
-```text
-error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable
- --> src/main.rs:4:5
-  |
-3 |     let first = &v[0];
-  |                  - immutable borrow occurs here
-4 |     v.push(3);
-  |     ^^^^^^^^^ mutable borrow occurs here
-5 |     println!("{first}");
-  |                ----- immutable borrow later used here
+```rust
+for item in &v {}     // borrows: item is &T, v is still usable
+for item in &mut v {} // borrows mutably: item is &mut T
+for item in v {}      // moves: item is T, v is gone afterwards
 ```
 
-Read it in this order:
+### Method receivers
 
-1. **Headline**: the error code and the operation that was refused.
-2. **`^^^` label**: where the refused operation happens.
-3. **`---` labels**: where the conflicting borrow or move started, and **"later used here"** — the use that keeps it alive. The fix almost always targets the span between those two labels: end the borrow sooner, don't take it, or take ownership instead.
-4. **`help:`** lines: often useful, not always right. In `record`, the suggested clone doesn't compile either.
-5. `rustc --explain E0502` prints a long explanation with examples.
+```rust
+impl Cart {
+    fn items(&self) {}     // read only
+    fn add(&mut self) {}   // may change the cart
+    fn into_items(self) {} // takes the cart; the caller can't use it afterwards
+}
+```
 
-| Code | Meaning |
-|---|---|
-| E0382 | use of a value after it was moved |
-| E0499 | two `&mut` borrows of the same value alive at once |
-| E0502 | `&mut` borrow while a `&` borrow is alive, or the reverse |
-| E0505 | moving a value while it is borrowed |
-| E0507 | moving out of something you only borrowed |
-| E0515 | returning a reference to a local that is about to be dropped |
-| E0596 | `&mut` borrow of a binding not declared `mut` |
-| E0716 | borrowing a temporary that is dropped at the end of the statement |
+### Error codes you'll meet
 
-Fix toolbox, in rough order of preference: reorder so a borrow ends before the conflicting use; borrow instead of move (`&v`, `&str` parameters); return an owned value instead of a reference; compute first, then mutate in a second step; index one element at a time instead of holding two `&mut`; declare the binding `mut`; clone when you truly need a second copy.
+- E0382: used a value after it was moved
+- E0499: two `&mut` borrows at once
+- E0502: `&mut` borrow while a `&` borrow is still in use
+- E0505: moved a value while it was borrowed
+- E0507: moved out of something you only borrowed
+- E0515: returned a reference to a local variable
+- E0596: changed a variable that isn't `mut`
 
-### Choosing a receiver
-
-| Receiver | Meaning | PHP analogy |
-|---|---|---|
-| `&self` | shared borrow, read-only | a method that only reads `$this` |
-| `&mut self` | exclusive borrow, may mutate | a method that writes `$this->…` |
-| `self` | takes ownership; the caller's value is gone, unless the type is `Copy` (lesson 02's `Money`), in which case the method gets a copy | none — PHP can't end an object's life from inside a method |
-
-Why each `Cart` method has its signature:
-
-| Method | Why |
-|---|---|
-| `items`, `find`, `total_cents` (`&self`) | Read-only. The returned `&[LineItem]` / `Option<&LineItem>` borrows from the cart: no copy, and the cart can't change while the caller holds it. Handing out `&` rather than `&mut` also stops callers breaking the invariants, for example by setting a quantity to 0. |
-| `add` (`&mut self`, `item: LineItem`) | Changes the cart in place. The cart must own what it stores, so it takes `item` by value; the caller gives it up, with no clone. |
-| `remove` (`&mut self`) → `Option<LineItem>` | Ownership of the removed line moves back to the caller. |
-| `set_quantity`, `find`, `remove` (`sku: &str`) | The SKU is only compared, never stored, so borrowing is enough. |
-| `merge` (`&mut self`, `other: Cart`) | Consuming `other` lets its lines move into `self` without cloning, and the compiler stops the caller from using the emptied cart afterwards. |
-| `into_items` (`self`) | Ends the cart's life and hands back its `Vec`. The `into_` prefix is the std convention for consuming conversions. |
-
-`LineItem::new` takes `&str`, which is convenient with literals but always allocates new `String`s. A constructor taking `String` would let callers hand over an allocation they already own; an `impl Into<String>` parameter accepts both (conversion traits are lesson 09).
+In the error output, the `^^^` label marks the refused operation and "later used here" marks what keeps the borrow alive. The fix is usually between them. `rustc --explain E0502` explains any code.
 
 ## Exercise
 
-Part A — fix the borrow checker (`src/broken.rs`):
+Part A — `src/broken.rs`:
 
-1. Run `cargo check --features broken`. You should see seven errors, one per function, all reported together.
-2. Fix them one at a time, re-running `cargo check --features broken` after each. Keep every doc-comment contract. You may change a signature (such as a return type) when that is the right fix; don't edit the tests. Prefer fixes without `.clone()`.
+1. Run `cargo check --features broken`. You'll see seven errors, one per function.
+2. Fix them one at a time. Keep each doc comment's contract. You may change a signature, but not the tests. Avoid `.clone()`.
 3. Fill in the table:
 
 | Function | Error code | Your fix, and why it is correct |
@@ -176,21 +168,21 @@ Part A — fix the borrow checker (`src/broken.rs`):
 | `append_doubles` | | |
 | `transfer` | | |
 
-4. `cargo test --features broken broken::` runs only Part A's tests. Part B's tests keep failing with `todo!()` until you finish it.
+4. `cargo test --features broken broken::` runs only Part A's tests.
 
-Part B — `Cart` (`src/lib.rs`):
+Part B — `Cart` in `src/lib.rs`:
 
-5. `LineItem::new` and `subtotal_cents`. `.to_string()` turns a `&str` into an owned `String`; `i64::from(quantity)` widens the `u32`.
-6. `Cart::new` and `items`. `&self.items` is a `&Vec<LineItem>`, which coerces to `&[LineItem]`.
-7. `find`: `self.items.iter().find(|item| item.sku == sku)`. The result borrows from `self`. `|item| …` is a closure, like PHP's `fn($item) => …`; lesson 06 covers closures and iterators.
-8. `add`: look for an existing line with `self.items.iter_mut().find(…)`, then either bump its quantity or push `item`. Handle quantity 0 first.
-9. `remove`: a private helper `fn position(&self, sku: &str) -> Option<usize>` using `iter().position(…)` is useful here and in step 10. `Vec::remove(index)` returns the owned element and keeps the order; `swap_remove` is O(1) but reorders.
-10. `set_quantity`: `position`, then assign through `self.items[index]` or remove.
-11. `total_cents`: a `for` loop over `&self.items`. Iterator `sum` comes in lesson 06.
-12. `merge`: `for item in other.items` moves each line out of `other`; hand it to `add`.
-13. `into_items`: return the field. Why doesn't this need a clone?
+5. `LineItem::new` and `subtotal_cents`: `.to_string()` turns a `&str` into a `String`; `i64::from(quantity)` widens the `u32`.
+6. `Cart::new` and `items`: return `&self.items`.
+7. `find`: `self.items.iter().find(|item| item.sku == sku)`. `|item| …` is a closure, like PHP's `fn($item) => …`.
+8. `add`: ignore quantity 0. Find an existing line with `iter_mut()` and bump its quantity, otherwise `push`.
+9. `remove`: write a private `fn position(&self, sku: &str) -> Option<usize>` with `iter().position(…)`, then use `Vec::remove(index)`.
+10. `set_quantity`: `position`, then set `self.items[index].quantity` or remove the line.
+11. `total_cents`: a `for` loop over `&self.items`.
+12. `merge`: `for item in other.items`, calling `add` for each.
+13. `into_items`: return the field.
 
-Optional extension: add `apply_discount(&mut self, percent: u32)` that lowers every unit price with `for item in &mut self.items`, plus your own tests. Then change the loop to `self.items.iter()` and read the error (E0594).
+Optional: add `apply_discount(&mut self, percent: u32)` using `for item in &mut self.items`, with tests.
 
 ## Done when
 
@@ -198,7 +190,5 @@ Optional extension: add `apply_discount(&mut self, percent: u32)` that lowers ev
 - The Part A table is filled in.
 - You can explain:
   - why `let b = a;` makes `a` unusable for a `String` but not for an `i64`
-  - in which order a function's locals are dropped, and when a temporary is dropped
-  - why `find` returns `Option<&LineItem>` instead of `Option<LineItem>`, and what you can't do to the cart while holding the result
-  - what the caller of `merge` can no longer do with `other`, and why no `LineItem` needed cloning
-  - the difference between `for item in v`, `for item in &v`, and `for item in &mut v`
+  - why `find` returns `Option<&LineItem>`, and what you can't do to the cart while you hold it
+  - the difference between `for item in v`, `&v`, and `&mut v`

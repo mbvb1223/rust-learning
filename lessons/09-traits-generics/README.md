@@ -1,6 +1,6 @@
 # Lesson 09 — Practical traits and generics
 
-Build plain-text and CSV report formatters behind one trait, then share the code that uses them: implement every `todo!()` in `src/lib.rs` until the tests pass.
+Build plain-text and CSV report formatters behind one trait, then share the code that uses them.
 
 ## Run
 
@@ -14,177 +14,183 @@ cargo clippy --all-targets -- -D warnings
 cargo run -- csv
 ```
 
-Until a function is implemented, its parameters show `unused variable` warnings (`with_row` also shows `unused mut`). Don't run `cargo fix`.
-
-`tests/custom_formatter.rs` is an integration test: a separate crate that sees only the public API, like another Composer package implementing your interface. `src/main.rs` is a small CLI that uses the library.
+Unused-variable warnings (and `unused mut` on `with_row`) are expected until you implement the stubs. Don't run `cargo fix`.
 
 ## Notes
 
-### Traits are interfaces with default methods
+### Traits
+
+A trait lists methods a type must have. It can also provide default methods that call the required ones:
 
 ```rust
-pub trait ReportFormatter {
-    fn format(&self, report: &Report) -> String;    // required
+trait Animal {
+    fn name(&self) -> &'static str; // required
 
-    fn file_extension(&self) -> &'static str {      // provided: implementors may override it
-        "txt"
+    fn greeting(&self) -> String {  // provided: implementors may override it
+        format!("Hello, {}!", self.name())
     }
 }
 
-impl ReportFormatter for Csv {
-    fn format(&self, report: &Report) -> String { … }
-    fn file_extension(&self) -> &'static str { "csv" }
+struct Cat;
+
+impl Animal for Cat {
+    fn name(&self) -> &'static str {
+        "cat"
+    }
 }
+
+println!("{}", Cat.greeting()); // Hello, cat!
 ```
 
-| PHP | Rust |
-|---|---|
-| `interface Formatter` | `trait ReportFormatter` |
-| `class Csv implements Formatter` | `impl ReportFormatter for Csv`: a separate block, can be added later |
-| abstract base class with shared methods | provided methods in the trait itself; no fields, no inheritance |
-| `trait Loggable` + `use Loggable;` | no equivalent: a PHP trait is a copy-paste mixin, not a type, and you can't type-hint it |
-| `Stringable` / `__toString()` | `impl Display` |
+A Rust trait is like a PHP interface with default methods. It's not like a PHP `trait`, which is a copy-paste mixin.
 
-- A provided method can call any other trait method. `file_name` calls `self.file_extension()`, so overriding the extension also fixes the file name.
-- You can implement your trait for types you don't own (`impl ReportFormatter for String`) and std traits for your types (`impl Display for Report`), but not a foreign trait for a foreign type: either the trait or the type must be local (the *orphan rule*).
-- A trait's methods are only callable where the trait is imported. `PlainText::default().format(&r)` in another crate needs `use traits_generics::ReportFormatter;`, otherwise: "no method named `format` found". In PHP, an object's methods are always callable.
+- `impl Animal for Cat` is a separate block, so you can add it to a type later.
+- Trait methods are only callable where the trait is imported, e.g. `use traits_generics::ReportFormatter;`.
 
 ### Generics and bounds
 
-```rust
-pub fn export<F: ReportFormatter>(formatter: &F, report: &Report, stem: &str) -> Export { … }
+A generic function works for any type that meets its bounds:
 
-fn describe<T>(item: &T) -> String
-where
-    T: Display + Clone,    // several bounds; `where` keeps long signatures readable
-{ … }
+```rust
+use std::fmt::Display;
+
+fn bracket<T: Display>(value: T) -> String {
+    format!("[{value}]")
+}
+
+println!("{}", bracket(42));    // [42]
+println!("{}", bracket("hey")); // [hey]
 ```
 
-- The body may only use what the bounds promise. `formatter.format(…)` compiles because `F: ReportFormatter` guarantees it exists. There is no duck typing.
-- **Monomorphization:** the compiler generates a separate copy of `export` for each type it's called with (`export::<PlainText>`, `export::<Csv>`). Calls are resolved at compile time and can be inlined; the cost is compile time and binary size.
-- PHP comparison: a `Formatter $f` type hint is checked at runtime on every call. A PHPStan `@template T of Formatter` is checked by a static analyser and does nothing at runtime. Rust bounds are checked at compile time and produce specialized code.
-- Impls can be generic too: `impl<L: Into<String>> From<(L, usize)> for Row` is one impl covering `(&str, usize)`, `(String, usize)`, and every other `L: Into<String>`.
+- The body may only use what the bounds promise. There is no duck typing.
+- Long bounds go in a `where` clause: `where T: Display + Clone`.
+- The compiler builds a separate copy of the function for each type you call it with, so calls are as fast as normal ones.
+
+PHPStan's `@template T of Formatter` is the closest PHP match, but Rust checks it in the compiler.
 
 ### `impl Trait`
 
-Argument position: shorthand for an anonymous generic parameter.
+In argument position, `impl Trait` is shorthand for a generic:
 
 ```rust
-pub fn new(title: impl Into<String>) -> Self                   // ≈ fn new<T: Into<String>>(title: T)
-pub fn join_display(items: &[impl Display], separator: &str) -> String
+fn new(title: impl Into<String>) -> Self // same as fn new<T: Into<String>>(title: T)
 ```
 
-The caller can't name that type: `join_display::<i32>(…)` doesn't compile. Pass a typed value instead (`let none: &[i32] = &[];`).
-
-Return position: "one concrete type that implements this trait, chosen by the function".
+In return position, it means "some type that implements this trait":
 
 ```rust
-pub fn rows_at_least(&self, min: usize) -> impl Iterator<Item = &Row> {
-    self.rows.iter().filter(move |row| …)
+fn evens(numbers: &[i32]) -> impl Iterator<Item = &i32> {
+    numbers.iter().filter(|n| **n % 2 == 0)
 }
+
+let numbers = vec![1, 2, 3, 4];
+let found: Vec<_> = evens(&numbers).collect();
+println!("{found:?}"); // [2, 4]
 ```
 
-- ≈ a PHP `: iterable` return type, but resolved at compile time with no boxing. The caller can only use `Iterator` methods.
-- It must be **one** type. A function returning `PlainText` from one `match` arm and `Csv` from another can't be `-> impl ReportFormatter`: use an enum + `match` (`export_as`) or a trait object (below).
-- Since edition 2024 the hidden type captures every lifetime in scope. `rows_at_least` would compile in 2021 too, because `Item = &Row` names `self`'s lifetime. Older code needed `+ '_` when the bound doesn't name it, e.g. `fn counts(&self) -> impl Iterator<Item = usize> + '_ { self.rows.iter().map(|r| r.count) }`.
-- The closure still needs `move`: it outlives the call, so it can't borrow the local `min`.
-- The stub reads `todo!() as std::iter::Empty<&Row>` because `todo!()` has type `!`, which doesn't implement `Iterator`, so it can't be the hidden type. Replace the whole line.
+- It must be **one** concrete type. You can't return `PlainText` from one `match` arm and `Csv` from another; use an enum and `match` instead.
+- A returned closure that uses a local variable needs `move`, because it outlives the call.
 
-### `Display` and `Default`
+### `Display`
+
+`Display` controls how `{}` prints your type:
 
 ```rust
-impl fmt::Display for FormatKind {
+use std::fmt;
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl fmt::Display for Point {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "…")    // or f.write_str("…")
+        write!(f, "({}, {})", self.x, self.y)
     }
 }
+
+let p = Point { x: 1, y: 2 };
+println!("{p}");          // (1, 2)
+let text = p.to_string(); // "(1, 2)"
 ```
 
-- `Debug` (`{:?}`) is for developers and can be derived. `Display` (`{}`) is for users and has no built-in derive.
-- `Display` gives you `.to_string()`: std implements `ToString` for every `T: Display`, a *blanket impl*.
-- `write!(f, …)` ignores width flags such as `{:<8}` applied to your value. Use `f.pad("text")` if callers should be able to align it.
+- `Display` gives you `.to_string()` for free.
+- `Debug` (`{:?}`) is for developers and can be derived; `Display` is for users and is written by hand.
+
+PHP's `__toString()` is the nearest match.
+
+### `Default`
+
+`#[derive(Default)]` gives every field its own default: `false`, `0`, `""`, an empty `Vec`.
 
 ```rust
-#[derive(Default)]                 // each field's own default: false, 0, "", empty Vec
-pub struct PlainText { pub show_total: bool }
-
-impl Default for Csv {             // hand-written: derived '\0' and false would be wrong
-    fn default() -> Self { … }
+#[derive(Debug, Default)]
+struct Options {
+    verbose: bool,
+    depth: u32,
 }
 
-let csv = Csv { header: false, ..Csv::default() };    // struct update: override some fields
+let o = Options { depth: 3, ..Options::default() };
+println!("{o:?}"); // Options { verbose: false, depth: 3 }
 ```
 
-- On an enum, `#[derive(Default)]` needs one variant marked `#[default]` (see `FormatKind`).
-- Struct update syntax ≈ PHP named arguments with constructor defaults (`new Csv(header: false)`).
+- `..Options::default()` fills in the fields you didn't write.
+- Write `impl Default` by hand when the field defaults are wrong, such as a `,` delimiter.
+- On an enum, mark one variant `#[default]`.
 
-### Conversions: `From`, `Into`, `TryFrom`, `FromStr`
+### Conversions
 
-| Trait | Use for | You get |
-|---|---|---|
-| `From<T> for U` | infallible conversion | `U::from(t)`, and `t.into()` via a blanket impl |
-| `TryFrom<T> for U` | fallible conversion | `U::try_from(t)` → `Result`, and `t.try_into()` |
-| `FromStr for U` | parsing text | `"csv".parse::<U>()` → `Result` |
+- `From<T> for U`: `U::from(t)`, and `t.into()` for free
+- `TryFrom<T> for U`: a conversion that can fail; returns `Result`
+- `FromStr for U`: parses text; enables `"csv".parse::<U>()`
 
 ```rust
-let row: Row = ("apples", 3).into();
-let byte = u8::try_from(300_i32);          // Err(TryFromIntError(()))
-let kind: FormatKind = "csv".parse()?;     // the target type selects the FromStr impl
+let s: String = "hi".into();
+let byte = u8::try_from(300_i32);   // Err(…): 300 doesn't fit in a u8
+let n: i32 = "42".parse().unwrap(); // 42
 ```
 
-- Implement `From`, not `Into`; `Into` comes for free.
-- `impl Into<String>` parameters accept `&str` and `String`: callers write `Report::new("Sales")` without `.to_string()`.
-- PHP 8.1 backed enums are the nearest match: `Format::from('xml')` throws `ValueError`, `Format::tryFrom('xml')` returns `null`. `FromStr` returns `Err(ParseFormatError { … })`, a value that says what went wrong.
-- `FormatKind` implements both `FromStr` and `TryFrom<&str>` so you practise both. `FromStr` is the convention for text: it enables `.parse()`, and argument parsers such as `clap` (lesson 15) use it. `TryFrom` is the general form, used for conversions between other types (`u8::try_from(300_i32)`).
-- Give error types `Display` and `impl std::error::Error`, so they work with `?` and `Box<dyn Error>` (lesson 05).
+- Implement `From`, not `Into`.
+- An `impl Into<String>` parameter accepts both `&str` and `String`.
+
+PHP's backed enums have `from()` and `tryFrom()`; Rust returns the error as a value instead of throwing.
 
 ### Derives
 
-| Derive | Gives | Requirement / gotcha |
-|---|---|---|
-| `Debug` | `{:?}`; needed by `assert_eq!` | — |
-| `Clone` | `.clone()` | — |
-| `Copy` | implicit copies instead of moves | also derive `Clone`; all fields `Copy`: no `String`/`Vec`, so `Report` can't be `Copy` |
-| `PartialEq`, `Eq` | `==` | `Eq` promises every value equals itself; an `f64` field (NaN) rules it out |
-| `Hash` | `HashMap` key, `HashSet` member | derive with `Eq`: equal values must hash equally |
-| `Default` | `T::default()` | every field must implement `Default` |
-| `PartialOrd`, `Ord` | `<`, `.sort()` | structs compare field by field in declaration order; enums by variant order first |
-
-A derive compiles only if every field implements that trait. Each derive is public API, and removing one later breaks callers, so derive what the type needs.
-
-### Trait objects (advanced, brief)
+A derive writes a trait impl for you, if every field implements that trait too:
 
 ```rust
-fn formatter_for(kind: FormatKind) -> Box<dyn ReportFormatter> {
-    match kind {
-        FormatKind::Text => Box::new(PlainText::default()),
-        FormatKind::Csv => Box::new(Csv::default()),
-    }
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Point {
+    x: i32,
+    y: i32,
 }
+
+let a = Point { x: 1, y: 2 };
+let b = a;              // copied, not moved
+println!("{}", a == b); // true
 ```
 
-- `dyn ReportFormatter` means dynamic dispatch: one compiled function, with the method looked up in a vtable at runtime. It's the closest match to PHP interface calls and allows mixed collections: `Vec<Box<dyn ReportFormatter>>`.
-- Choose by the set of types. A closed, known set → enum + `match`. An open set (plugins, other crates) → generics, or `dyn` when the type is only known at runtime.
-- A trait with generic methods can't be used as `dyn` (it must be *dyn compatible*). The roadmap's advanced topics cover trait objects, associated types, and the orphan rule.
+- `Debug`: `{:?}`; needed by `assert_eq!`
+- `Clone`: `.clone()`
+- `Copy`: copies instead of moves; no `String` or `Vec` fields allowed
+- `PartialEq`, `Eq`: `==`
+- `Hash`: lets the type be a `HashMap` key or `HashSet` member; derive it with `Eq`
+- `Default`: `T::default()`
 
 ## Exercise
 
 Implement in this order:
 
-1. `From<(L, usize)> for Row`: `label.into()`. `("apples", 3).into()` now works too.
-2. `Report::new`, `with_row`, `total`. `with_row` takes `mut self`, pushes, and returns `self`. `total`: `iter().map(…).sum()`.
-3. `Report::rows_at_least`: `self.rows.iter().filter(…)`. Leave out `move` first and read the error.
-4. `Display for Report`: `write!(f, …)`. The tests call `.to_string()`, which you never write.
+1. `From<(L, usize)> for Row`: `label.into()`.
+2. `Report::new`, `with_row`, `total`: `with_row` takes `mut self`, pushes, and returns `self`; `total` is `iter().map(…).sum()`.
+3. `Report::rows_at_least`: replace the whole `todo!() as …` line with `self.rows.iter().filter(…)`. Leave out `move` first and read the error.
+4. `Display for Report`: `write!(f, …)`. The tests call `.to_string()`.
 5. `join_display`: map each item to a `String`, collect into a `Vec<String>`, then `.join(separator)`.
-6. `Display for FormatKind`, then `FromStr` (`str::eq_ignore_ascii_case`), then `TryFrom<&str>` by delegating to `s.parse()`, then `Display for ParseFormatError` with `{:?}` and `join_display(&FormatKind::ALL, ", ")`.
-7. The trait's provided methods `file_extension` and `file_name`. The `TitleOnly` integration test now passes with no code of its own: `cargo test --test custom_formatter downstream` (plain `cargo test` runs `tests/` only once every unit test passes).
-8. `PlainText::format`:
-   - Collect `(label, count)` pairs, push `("total", report.total())` when shown, then compute both widths from that list.
-   - `"=".repeat(n)`, `str::chars().count()`, `count.to_string().len()`.
-   - `format!("{label:<width$} {count:>digits$}")` pads by `char`s, not bytes.
-9. `csv_field`: `field.contains([delimiter, '"', '\r', '\n'])` and `str::replace`.
-   - Quoting follows RFC 4180, but records end with `\n` rather than the RFC's CRLF (most parsers accept both).
-   - Unlike PHP's `fputcsv`, it doesn't quote fields just for containing spaces, and it never uses a `\` escape.
+6. `Display for FormatKind`, then `FromStr` (`str::eq_ignore_ascii_case`), then `TryFrom<&str>` via `s.parse()`, then `Display for ParseFormatError` with `{:?}` and `join_display(&FormatKind::ALL, ", ")`.
+7. The trait's provided methods `file_extension` and `file_name`. Then `cargo test --test custom_formatter downstream` passes with no code of its own.
+8. `PlainText::format`: collect `(label, count)` pairs plus `("total", report.total())` when shown, take both widths from that list (`chars().count()`, `count.to_string().len()`), then `format!("{label:<width$} {count:>digits$}")` and `"=".repeat(n)`.
+9. `csv_field`: `field.contains([delimiter, '"', '\r', '\n'])`, then `str::replace` to double the quotes.
 10. `Csv`: `Default`, `format`, and the `file_extension` override.
 11. `export`, then `export_as`, calling `export` from each `match` arm.
 
@@ -196,15 +202,12 @@ Experiments (undo each afterwards):
 - Remove `Hash` from `FormatKind`'s derives and read the error.
 - Write `fn pick(kind: FormatKind) -> impl ReportFormatter` returning `PlainText::default()` or `Csv::default()` from a `match`, and read the error.
 
-Optional extension: add `formatter_for` (above) and an `export_dyn(kind, report, stem)` that calls `export(&*formatter_for(kind), report, stem)`. It fails: generic parameters are implicitly `Sized`, and `dyn ReportFormatter` isn't. Relax the bound to `F: ReportFormatter + ?Sized`, then compare `export_dyn` with `export_as`.
+Optional: add `formatter_for(kind) -> Box<dyn ReportFormatter>` and pass `&*formatter_for(kind)` to `export`; make it compile with `F: ReportFormatter + ?Sized`.
 
 ## Done when
 
 - `cargo test`, `cargo fmt --check`, and `cargo clippy --all-targets -- -D warnings` pass.
 - You can explain:
   - how a Rust trait differs from a PHP interface, and from a PHP trait
-  - what monomorphization produces for `export`, and how a `Box<dyn ReportFormatter>` call is dispatched instead
   - why the `pick` experiment doesn't compile as `-> impl ReportFormatter`, and how `export_as` avoids the problem
-  - why `Csv` has a hand-written `Default` but `PlainText` derives it
   - why implementing `From` is enough to call `.into()`
-  - why `FormatKind` can derive `Copy` and `Hash` but `Report` can't derive `Copy`

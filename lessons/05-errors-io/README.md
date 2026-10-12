@@ -1,6 +1,6 @@
 # Lesson 05 — Errors and file I/O
 
-Build a `wc`-style CLI that counts a text file and reports missing files, invalid UTF-8, empty input, and bad arguments: implement every `todo!()` in `src/lib.rs` and `src/main.rs` until the tests pass.
+Build a `wc`-style CLI that counts a text file and reports bad input as typed errors: implement every `todo!()` in `src/lib.rs` and `src/main.rs`.
 
 ## Run
 
@@ -16,77 +16,73 @@ cargo run -q -- --max-width 40 tests/fixtures/sample.txt
 cargo run -q -- missing.txt; echo "exit code: $?"
 ```
 
-Arguments after `--` go to your program, not to Cargo. `-q` hides Cargo's own output.
-
-Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`.
+Arguments after `--` go to your program, not to Cargo; `-q` hides Cargo's own output. Don't run `cargo fix`.
 
 ## Notes
 
-### `Result` instead of exceptions
+### Result
+
+A function that can fail returns `Result<T, E>`: either `Ok(value)` or `Err(error)`. There are no exceptions; you handle the error with `match`.
 
 ```rust
-enum Result<T, E> { Ok(T), Err(E) }     // in std, always in scope
-
 match "42".parse::<u32>() {
-    Ok(n) => println!("got {n}"),
-    Err(err) => eprintln!("not a number: {err}"),
+    Ok(n) => println!("got {n}"), // got 42
+    Err(err) => println!("not a number: {err}"),
 }
 ```
 
-- A PHP exception is invisible in the signature; `@throws` is only a comment. In Rust the failure is part of the return type: `fn read_text(path: &Path) -> Result<String, AppError>`. Callers can't reach the `String` without handling the `Err`.
-- Ignoring a returned `Result` is a compiler warning (`#[must_use]`).
-- Errors are plain values. Nothing unwinds the stack, and there is no class hierarchy to catch by parent type. "Catching by type" means matching enum variants.
+In PHP, `@throws` is only a comment. In Rust the error is part of the return type, so a caller can't forget it.
 
-| PHP | Rust |
-|---|---|
-| `throw new NotFound($path)` | `return Err(AppError::NotFound(path))` |
-| `try { … } catch (NotFound $e) { … }` | `match result { Err(AppError::NotFound(p)) => …, … }` |
-| let it bubble up | `?` |
-| `@file_get_contents($f)` and `=== false` | `fs::read_to_string(f)` returns a `Result`, so the check can't be forgotten |
-| `set_error_handler` turning warnings into `ErrorException` | not needed: std has no warning channel. Recoverable failures come back as `Err`; a few APIs panic instead (see "Panic or `Result`?") |
-| `$e->getMessage()` / `$e->getPrevious()` | `Display` / `Error::source()` |
-| uncaught `Error`, fatal error | panic |
+### The `?` operator
 
-### `?`
+`?` unwraps an `Ok`, or returns the `Err` from the current function right away:
 
 ```rust
-fn load(path: &Path) -> Result<String, AppError> {
-    let text = fs::read_to_string(path)?;   // io::Error → AppError through From
-    Ok(text)
+use std::num::ParseIntError;
+
+fn double(s: &str) -> Result<u32, ParseIntError> {
+    let n = s.parse::<u32>()?;
+    Ok(n * 2)
 }
+
+println!("{:?}", double("21"));  // Ok(42)
+println!("{:?}", double("abc")); // Err(ParseIntError { kind: InvalidDigit })
 ```
 
-`expr?` is roughly:
+`?` only works inside a function that returns `Result` (or `Option`). It also converts the error with `From::from` (next sections).
+
+### Converting errors
+
+- `result.map_err(|err| …)` changes the error and keeps the value.
+- `option.ok_or_else(|| …)` turns `None` into an `Err`, so you can use `?` on it.
+- `result.and_then(|value| …)` chains another step that can fail.
 
 ```rust
-match expr {
-    Ok(value) => value,
-    Err(err) => return Err(From::from(err)),
-}
+let first: Option<&str> = None;
+let value = first.ok_or_else(|| "missing value".to_string());
+println!("{value:?}"); // Err("missing value")
 ```
 
-- `?` only works inside a function returning `Result`, or `Option` (where `None` returns early).
-- `From::from` is the conversion hook: `?` compiles once `impl From<io::Error> for AppError` exists. The PHP equivalent is `catch (IOException $e) { throw new AppException(previous: $e); }`, written once instead of at every call site.
-- `From` only sees the error itself. When you need context (which path? which flag?), convert explicitly with `map_err`.
-- `?` doesn't mix `Option` and `Result`. Convert first: `opt.ok_or_else(|| AppError::Usage("…".to_string()))?`.
-
-| Method | Does |
-|---|---|
-| `result.map_err(f)` | changes the error, keeps the value |
-| `opt.ok_or_else(f)` | `None` → `Err(f())` |
-| `result.and_then(f)` | chains another step that can fail |
-| `result.unwrap_or(default)` | discards the error and uses a default |
+Use `map_err` when the new error needs context `From` can't know, such as the file path.
 
 ### A custom error type
 
+An error type is usually an enum with one variant per kind of failure:
+
 ```rust
+use std::{fmt, io};
+
 #[derive(Debug)]
 pub enum ConfigError {
     MissingKey(String),
     Io(io::Error),
 }
+```
 
-impl fmt::Display for ConfigError {                       // ≈ getMessage()
+`Display` gives the message, like PHP's `getMessage()`:
+
+```rust
+impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConfigError::MissingKey(key) => write!(f, "missing key: {key}"),
@@ -94,8 +90,12 @@ impl fmt::Display for ConfigError {                       // ≈ getMessage()
         }
     }
 }
+```
 
-impl std::error::Error for ConfigError {                  // ≈ getPrevious()
+`Error::source()` gives the cause, like `getPrevious()`:
+
+```rust
+impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ConfigError::Io(err) => Some(err),
@@ -103,148 +103,169 @@ impl std::error::Error for ConfigError {                  // ≈ getPrevious()
         }
     }
 }
+```
 
-impl From<io::Error> for ConfigError {                    // lets `?` convert
+Show the inner error in `Display` **or** through `source()`, never both, or it gets printed twice.
+
+### From and `?`
+
+`impl From<io::Error>` tells `?` how to turn an `io::Error` into your type:
+
+```rust
+impl From<io::Error> for ConfigError {
     fn from(err: io::Error) -> Self {
         ConfigError::Io(err)
     }
 }
-```
 
-- `impl Display for ConfigError { … }` implements a trait for a type, like `implements Stringable` on a PHP class. Lesson 09 covers traits.
-- `std::error::Error` requires `Debug + Display`. `source()` defaults to `None`, so `impl Error for X {}` is valid.
-- Show the inner error's message **either** in `Display` **or** through `source()`, not both. Error reporters walk the `source()` chain and would print it twice.
-- `io::Error` is neither `Clone` nor `PartialEq`, so an enum holding it can't derive them, and `assert_eq!` on the whole `Result` won't compile. Tests use `matches!`:
-
-```rust
-assert!(matches!(result, Err(AppError::NotFound(_))));
-```
-
-### Real projects: `thiserror` and `anyhow`
-
-You'll rarely write those three impls by hand:
-
-```rust
-#[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    #[error("missing key: {0}")]
-    MissingKey(String),
-    #[error("cannot read config")]
-    Io(#[from] io::Error),      // generates From and source()
+fn load(path: &Path) -> Result<String, ConfigError> {
+    let text = fs::read_to_string(path)?; // io::Error becomes ConfigError::Io
+    Ok(text)
 }
 ```
 
-- `thiserror`, for libraries: derives `Display`, `Error`, and `From`. Callers can still `match` on variants.
-- `anyhow`, for applications: one `anyhow::Error` type for everything, plus `.context("reading config")?` to add a message. Callers can't match on variants, so use it at the top of a binary.
+### Testing errors with `matches!`
 
-This lesson writes the impls by hand so you know what those macros generate.
-
-### Panic or `Result`?
-
-| Situation | Use |
-|---|---|
-| Missing file, bad argument, invalid data: caused by input or environment | `Result`; the caller decides |
-| A bug: broken invariant, an index you proved in range, a "can't happen" state | panic: `expect("why it can't fail")`, `assert!`, `unreachable!()` |
-| Tests and prototypes | `unwrap()` / `expect()` are fine |
-
-- A panic unwinds the thread and, in `main`, ends the program with exit code 101. Treat it like PHP's uncaught `Error`, not as control flow. `todo!()` is a panic.
-- Prefer `expect("parse_args checked this")` to `unwrap()`: the message records why failure is impossible.
-- Hidden panics: `v[10]` out of range, integer overflow in debug builds, `println!` when stdout is closed (piped into `head`), and `std::env::args()` with a non-Unicode argument (`args_os()` doesn't panic). That's why `run` writes through a `Write` and returns `Result` instead of calling `println!`.
-
-### Files: `std::fs` and `std::io`
-
-| Rust | PHP |
-|---|---|
-| `fs::read_to_string(path)?` | `file_get_contents($path)`, but fails with `ErrorKind::InvalidData` on invalid UTF-8 |
-| `fs::read(path)?` → `Vec<u8>` | `file_get_contents($path)` (binary-safe) |
-| `String::from_utf8(bytes)` → `Result<String, FromUtf8Error>` | `mb_check_encoding($s, 'UTF-8')` |
-| `fs::write(path, data)?` | `file_put_contents($path, $data)` |
-| `err.kind() == io::ErrorKind::NotFound` | reading the warning text or `error_get_last()` |
+`io::Error` can't be compared with `==`, so tests check the variant with `matches!`:
 
 ```rust
-match fs::read_to_string(path) {
-    Ok(text) => …,
-    Err(err) if err.kind() == io::ErrorKind::NotFound => …,
-    Err(err) => …,
-}
+let result: Result<(), ConfigError> = Err(ConfigError::MissingKey("port".to_string()));
+println!("{}", matches!(result, Err(ConfigError::MissingKey(_)))); // true
 ```
 
-- PHP strings are bytes. A Rust `String` is always valid UTF-8, so reading a Latin-1 file into a `String` is an error, not mojibake.
-- Don't call `path.exists()` before reading: the file can disappear in between. Read it, then handle `NotFound`.
-- `io::Error` messages don't include the path (`No such file or directory (os error 2)`). Add it yourself; that's why `NotFound` carries a `PathBuf`.
-- `&Path` / `PathBuf` are the path versions of `&str` / `String`. Paths aren't guaranteed to be UTF-8, so print them with `path.display()`. A `&PathBuf` coerces to `&Path`.
+### Panic or Result?
 
-### Writing: `io::Write`
+- Bad input or a missing file: return `Result` and let the caller decide.
+- A bug that can't happen: panic with `expect("why it can't fail")`, `assert!`, or `unreachable!()`.
+- `unwrap()` is fine in tests and prototypes.
+
+A panic ends the program with exit code 101, like an uncaught PHP `Error`. `todo!()` is a panic too.
+
+### Reading files
+
+`fs::read_to_string(path)` reads a whole file into a `String`. `err.kind()` tells you what went wrong:
 
 ```rust
+let message = match fs::read_to_string("missing.txt") {
+    Ok(text) => text,
+    Err(err) if err.kind() == io::ErrorKind::NotFound => "no such file".to_string(),
+    Err(err) => format!("other error: {err}"),
+};
+println!("{message}"); // no such file
+```
+
+- A `String` is always valid UTF-8, so a file with invalid UTF-8 fails with `io::ErrorKind::InvalidData`. `tests/fixtures/latin1.txt` is such a file: its `é` is the single byte `0xE9`.
+- `io::Error` messages don't include the path. Add it yourself.
+
+### Paths
+
+`&Path` and `PathBuf` are the path versions of `&str` and `String`. Print a path with `.display()`:
+
+```rust
+use std::path::{Path, PathBuf};
+
+let path = Path::new("notes.txt");
+let owned: PathBuf = path.to_path_buf();
+println!("{}", owned.display()); // notes.txt
+```
+
+A `&PathBuf` works wherever a `&Path` is expected.
+
+### Writing with `io::Write`
+
+`writeln!(out, …)` is `println!` aimed at any writer. A failed write is an `Err`, not a panic:
+
+```rust
+use std::io::{self, Write};
+
 fn greet(out: &mut impl Write, name: &str) -> io::Result<()> {
-    writeln!(out, "hello, {name}")?;   // like fwrite($stream, "hello, $name\n"), but returns io::Result<()>
+    writeln!(out, "hello, {name}")?;
     Ok(())
 }
+
+let mut out = Vec::new();
+greet(&mut out, "ann").unwrap();
+println!("{:?}", String::from_utf8(out).unwrap()); // "hello, ann\n"
 ```
 
-- `out: &mut impl Write` accepts any writer, much like a PHP function taking a stream resource: `io::stdout()`, a `File`, a `Vec<u8>`, a socket. Lesson 09 explains `impl Trait`.
-- `writeln!` is `println!` aimed at a writer. A failed write is an `Err` you handle with `?`, not a panic.
-- `Vec<u8>` is an in-memory writer, like `php://memory`. The tests pass one and compare the bytes; `main` passes `&mut io::stdout()`, the real target.
-- `writeln!` calls a `Write` method, so it needs `use std::io::Write;` in scope. `src/lib.rs` already has it.
+A `Vec<u8>` is an in-memory writer, like `php://memory`. Tests pass one; `main` passes `&mut io::stdout()`.
 
-### Command-line arguments and exit codes
+### Command-line arguments
+
+`std::env::args()` yields the arguments as `String`s. The first one is the program name, like `$argv[0]`:
 
 ```rust
-let args: Vec<String> = std::env::args().collect();   // args[0] is the program, like $argv[0]
-eprintln!("error: {err}");                            // stderr, like fwrite(STDERR, …)
+let args: Vec<String> = std::env::args().collect();
+```
 
-fn main() -> ExitCode {
-    match work() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(_) => ExitCode::from(2),
+`while let` loops as long as a pattern matches. Unlike `for`, the body can call `next()` itself to grab an option's value:
+
+```rust
+let args = ["--width", "40", "notes.txt"];
+let mut rest = args.iter();
+while let Some(arg) = rest.next() {
+    if *arg == "--width" {
+        println!("width: {:?}", rest.next()); // width: Some("40")
+    } else {
+        println!("file: {arg}"); // file: notes.txt
     }
 }
 ```
 
-- Returning `ExitCode` from `main` drops everything normally: files close, `BufWriter`s flush. `std::process::exit(2)` ends the process immediately without running destructors. This is unlike PHP's `exit(2)`, which still runs shutdown functions and `__destruct`.
-- `fn main() -> Result<(), Box<dyn Error>>` also works. An `Err` prints its **Debug** form (`Error: NotFound("x.txt")`) and exits with 1. Fine for prototypes; this lesson wants exact messages and exit codes.
-- Convention: exit code 2 for usage errors, 1 for other failures.
-- Real CLIs parse arguments with `clap` (lesson 15). Parsing by hand here is practice with `Option`, `Result`, and `?`.
+### Exit codes and stderr
+
+`main` can return an `ExitCode`. `eprintln!` prints to stderr, like `fwrite(STDERR, …)`:
+
+```rust
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    eprintln!("error: something failed");
+    ExitCode::from(2)
+}
+```
+
+```text
+$ cargo run -q; echo $?
+error: something failed
+2
+```
+
+Convention: 2 for usage errors, 1 for other failures. Prefer returning `ExitCode` to `std::process::exit`, which skips cleanup.
 
 ### Integration tests
 
-`tests/cli.rs` runs the compiled binary with `std::process::Command` and checks stdout, stderr, and the exit code. Cargo provides the binary's path as `env!("CARGO_BIN_EXE_errors-io")`. Lesson 08 covers the `tests/` folder. In `tests/fixtures/latin1.txt` the `é` is the single byte `0xE9`: valid Latin-1, invalid UTF-8.
+`tests/cli.rs` runs the compiled binary and checks its stdout, stderr, and exit code. Lesson 08 covers the `tests/` folder.
 
 ## Exercise
 
-Implement in this order. The doc comments in `src/` are the full specification.
+The doc comments in `src/` are the full spec.
 
 Part A — `AppError` in `src/lib.rs`:
 
-1. `Display`: one `match` with `write!(f, …)`. Use `path.display()` for paths.
+1. `Display`: one `match` with `write!(f, …)`; `path.display()` for paths.
 2. `Error::source`: only `Io` has a source.
 3. `From<io::Error>`: always `Io`, whatever the error's kind.
-4. `exit_code`.
+4. `exit_code`: `2` for `Usage`, `1` for everything else.
 
 Part B — the pipeline:
 
-5. `parse_args`:
-   - `let mut rest = args.iter().skip(1);` then `while let Some(arg) = rest.next()`. `for arg in rest` takes ownership of the iterator, so its body can't call `rest.next()` to fetch the option's value.
-   - `rest.next().ok_or_else(…)?` for a missing value.
-   - `value.parse::<usize>()` returns a `Result`. A `match` with a guard (`Ok(n) if n > 0 => n`) also rejects zero.
-   - Track the file as `Option<PathBuf>` and turn `None` into the error after the loop.
-6. `read_text`: `fs::read_to_string` plus `map_err` with a `match` on `err.kind()`. `path.to_path_buf()` makes the owned copy the error needs.
+5. `parse_args`: `let mut rest = args.iter().skip(1);` with `while let`; `rest.next().ok_or_else(…)?` for a missing value; `Ok(n) if n > 0` in a `match` on `parse::<usize>()`; track the file as `Option<PathBuf>`.
+6. `read_text`: `fs::read_to_string` plus `map_err` with a `match` on `err.kind()`; `path.to_path_buf()` for the error.
 7. `count`: `lines()`, `split_whitespace()`, `chars().count()`.
-8. `write_report`: `writeln!(out, …)?` four times. The `?` compiles because of step 3.
-9. `run`: `?` on each step and one `if`.
+8. `write_report`: `writeln!(out, …)?` four times. The `?` works because of step 3.
+9. `run`: `?` on each step and one `if` for `EmptyInput`.
 
 Part C — `src/main.rs`:
 
-10. `main`: `parse_args(&args).and_then(|config| run(&config, &mut io::stdout()))`, then `match`. Walk the cause chain with `while let Some(cause) = source { …; source = cause.source(); }`. Calling `.source()` needs the trait in scope: `use std::error::Error;`.
+10. `main`: `parse_args(&args).and_then(|config| run(&config, &mut io::stdout()))`, then `match`. Walk the causes with `while let Some(cause) = source { …; source = cause.source(); }` (needs `use std::error::Error;`).
 
-Optional extension: run `cargo add thiserror`, replace your `Display`, `Error`, and `From` impls with `#[derive(thiserror::Error)]` plus `#[error(…)]` and `#[from]` attributes, and confirm every test still passes. For paths, write `#[error("file not found: {}", .0.display())]`.
+Optional: `cargo add thiserror`, replace your three impls with `#[derive(thiserror::Error)]`, `#[error("…")]`, and `#[from]` (paths: `#[error("file not found: {}", .0.display())]`), and keep the tests green.
 
 ## Done when
 
 - `cargo test`, `cargo fmt --check`, and `cargo clippy --all-targets -- -D warnings` pass.
 - You can explain:
-  - what `?` expands to, and why `write_report` can use plain `?` while `read_text` needs `map_err`
-  - why `AppError::Io` exposes its details through `source()` and not in `Display`
+  - what `?` does, and why `write_report` can use plain `?` while `read_text` needs `map_err`
+  - why `AppError::Io` shows its details through `source()` and not in `Display`
   - when to panic and when to return `Result`
-  - why `main` returns `ExitCode` instead of calling `std::process::exit`

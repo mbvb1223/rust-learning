@@ -1,10 +1,10 @@
 # Lesson 01 — Cargo and basic syntax
 
-Build a temperature converter: implement every `todo!()` in `src/lib.rs` until the tests pass.
+Build a temperature converter in `src/lib.rs`.
 
 ## Run
 
-There's no Rust on the Mac; everything runs in the `rust` container. From the repository root, start it and open a shell:
+There's no Rust on the Mac; everything runs in the `rust` container. From the repository root:
 
 ```bash
 docker compose up -d
@@ -21,65 +21,142 @@ cargo clippy --all-targets -- -D warnings
 cargo run
 ```
 
-Until a function is implemented, its parameters show `unused variable` warnings. Don't run `cargo fix`; it renames them to `_name`.
+Unfinished functions show `unused variable` warnings. Don't run `cargo fix`.
 
 ## Notes
 
 ### Cargo
 
-| Command | What it does | PHP equivalent |
-|---|---|---|
-| `cargo new name` | Create a project | `composer init` |
-| `cargo check` | Type-check without building — fastest feedback | `php -l` + PHPStan |
-| `cargo build` | Compile to `target/debug/` (`--release` for optimized) | — |
-| `cargo run` | Build and run `src/main.rs` | `php script.php` |
-| `cargo test` | Build and run all `#[test]` functions | `vendor/bin/phpunit` |
+Cargo builds, runs, and tests your project. `Cargo.toml` is like `composer.json`, and `Cargo.lock` like `composer.lock`.
 
-`Cargo.toml` ≈ `composer.json`. `Cargo.lock` ≈ `composer.lock` — commit it for applications.
+- `cargo new name`: create a project
+- `cargo check`: type-check only, the fastest feedback
+- `cargo build`: compile to `target/debug/` (`--release` for an optimized build)
+- `cargo run`: build and run `src/main.rs`
+- `cargo test`: build and run every `#[test]` function
 
-This crate has a library (`src/lib.rs`, the exercises) and a binary (`src/main.rs`, which uses the library). Lesson 08 explains the split.
+This crate has a library (`src/lib.rs`, the exercises) and a small binary (`src/main.rs`) that uses it.
 
-### Variables and types
+### Variables
+
+Variables are immutable unless declared with `mut`:
 
 ```rust
-let count = 5;            // i32 inferred, immutable
-let mut total = 0.0;      // f64 inferred, mutable
-total += 1.5;
+let x = 5;
+// x = 6;        // error[E0384]: cannot assign twice to immutable variable `x`
 
-let input = "  42 ";
-let input = input.trim(); // shadowing: a new variable with the same name
+let mut y = 5;
+y += 1;
+println!("{y}"); // 6
 ```
 
-- Variables are immutable unless declared `mut`.
-- Shadowing creates a new variable, which can have a different type. `x = …` mutates; `let x = …` shadows.
-- Default integer type is `i32`, default float is `f64`. Others: `i8`–`i128`, `u8`–`u128`, `isize`/`usize`, `f32`, `bool`, `char`.
-- **No implicit conversion.** `5 + 1.5` does not compile. Convert explicitly: `f64::from(5)` (lossless) or `5 as f64` (may lose data).
-- **Integer division truncates:** `9 / 5 == 1`. In PHP `9 / 5` is `1.8`; Rust behaves like `intdiv(9, 5)`.
-- `&'static str` is the type of a string literal such as `"hot"`. Lesson 04 covers strings.
+### Shadowing
 
-### Expressions
-
-A block evaluates to its last expression when it has **no semicolon**. Functions return that value; use `return` only for early exits.
+`let` with an existing name creates a new variable. The new one may have a different type:
 
 ```rust
-fn sign(n: i32) -> &'static str {
-    if n < 0 { "negative" } else { "non-negative" } // `if` is an expression: no ternary needed
+let spaces = "   ";
+let spaces = spaces.len();
+println!("{spaces}"); // 3
+```
+
+`x = …` changes a variable; `let x = …` shadows it.
+
+### Types
+
+- Integers: `i8`–`i128`, `u8`–`u128`, `isize`, `usize`. The default is `i32`.
+- Floats: `f32`, `f64`. The default is `f64`.
+- Also `bool`, `char`, and `&'static str`, the type of a string literal (lesson 04).
+
+```rust
+let count = 5;     // i32
+let total = 1.5;   // f64
+let ok = true;     // bool
+let label = "hot"; // &'static str
+```
+
+### No implicit conversion
+
+Rust never converts between number types for you:
+
+```rust
+let n = 5;
+// let x = n + 1.5;         // error[E0277]: cannot add a float to an integer
+let x = f64::from(n) + 1.5;
+println!("{x}");            // 6.5
+```
+
+`f64::from(n)` is lossless. `n as f64` also works but may lose data.
+
+### Integer division
+
+Dividing two integers drops the remainder:
+
+```rust
+println!("{}", 9 / 5);     // 1
+println!("{}", 9.0 / 5.0); // 1.8
+```
+
+In PHP `9 / 5` is `1.8`; Rust's integer `/` behaves like `intdiv(9, 5)`.
+
+### Functions return the last expression
+
+A block's value is its last expression, written **without** a semicolon. Use `return` only to exit early.
+
+```rust
+fn double(n: i32) -> i32 {
+    n * 2
+}
+
+println!("{}", double(4)); // 8
+```
+
+### `if` is an expression
+
+`if`/`else` produces a value, so Rust needs no ternary operator:
+
+```rust
+let n = -3;
+let sign = if n < 0 { "negative" } else { "non-negative" };
+println!("{sign}"); // negative
+```
+
+### `for` and `while`
+
+`for` loops over a range. `1..4` excludes the end; `1..=3` includes it.
+
+```rust
+for n in 1..=3 {
+    print!("{n} "); // 1 2 3
+}
+
+let mut n = 3;
+while n > 0 {
+    print!("{n} "); // 3 2 1
+    n -= 1;
 }
 ```
 
-### Loops
+### `loop` and `break`
+
+`loop` repeats until `break`. `break value` makes the loop return that value:
 
 ```rust
-for n in 1..=3 {}          // 1, 2, 3   (`1..3` excludes 3)
-while condition {}
+let mut n = 1;
 let found = loop {
-    break 42;              // only `loop` can return a value
+    if n * n > 20 {
+        break n;
+    }
+    n += 1;
 };
+println!("{found}"); // 5
 ```
 
-`for` and `while` always evaluate to `()`.
+Only `loop` can return a value; `for` and `while` always give `()`.
 
 ### Tests
+
+A function marked `#[test]` is a test. `assert_eq!` compares two values; `assert!` checks a condition.
 
 ```rust
 #[test]
@@ -89,20 +166,18 @@ fn adds() {
 }
 ```
 
-Floats are inexact. The tests compare them with a tolerance (`assert_close`) instead of `assert_eq!`. The `#[cfg(test)] mod tests` wrapper is explained in lesson 08.
+Floats are inexact (`0.1 + 0.2` is `0.30000000000000004`), so this lesson's tests compare them with a tolerance (`assert_close`).
 
 ## Exercise
 
-Implement in this order:
-
-1. `celsius_to_fahrenheit`, `fahrenheit_to_celsius`. Use float literals (`9.0`, not `9`).
-2. `celsius_to_fahrenheit_whole`: integers only. Operation order matters: `37 * 9 / 5` ≠ `37 * (9 / 5)`.
-3. `round_to`: use shadowing for the intermediate value. `f64::round` rounds half away from zero, like PHP's `round()`.
-4. `describe`: a single `if`/`else if` expression, no `return`.
-5. `average_fahrenheit`: a `for` loop over an inclusive range, plus `let mut` accumulators.
+1. `celsius_to_fahrenheit`, `fahrenheit_to_celsius`: use float literals (`9.0`, not `9`).
+2. `celsius_to_fahrenheit_whole`: integers only. Order matters: `37 * 9 / 5` ≠ `37 * (9 / 5)`.
+3. `round_to`: shadow the intermediate value. `f64::round` rounds half away from zero, like PHP's `round()`.
+4. `describe`: one `if`/`else if` expression, no `return`.
+5. `average_fahrenheit`: a `for` loop over an inclusive range, with `let mut` accumulators.
 6. `first_celsius_reaching`: `loop` with `break value`.
 
-Then run `cargo run` to print the conversion table.
+Then `cargo run` prints the conversion table.
 
 ## Done when
 
