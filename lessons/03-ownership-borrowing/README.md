@@ -160,13 +160,13 @@ Part A — `src/broken.rs`:
 
 | Function | Error code | Your fix, and why it is correct |
 |---|---|---|
-| `sorted` | | |
-| `shout_all` | | |
-| `customer_name` | | |
-| `normalize` | | |
-| `record` | | |
-| `append_doubles` | | |
-| `transfer` | | |
+| `sorted` | E0596 | `mut numbers`. The function owns the `Vec`, so it may change it; `mut` only affects this local binding, not the caller. |
+| `shout_all` | E0382 | `for name in &names`. The loop borrows instead of moving, so `names.len()` still works. `to_uppercase` builds a new `String` from the borrow. |
+| `customer_name` | E0507 | Return `&str` and `&customer.name`. You can't move a field out of a `&Customer`; borrowing it ties the result to `customer`, and the caller keeps the struct. |
+| `normalize` | E0515 | Return `String`. `to_lowercase` creates new data owned by a local that is freed when the function returns, so ownership must go to the caller. |
+| `record` | E0505 | Count chars before `log.push(entry)`. `text` borrowed `entry`, then `push` moved it. Using the borrow first ends it before the move. |
+| `append_doubles` | E0502 | Save `len`, then loop `0..len` with `numbers[i]`. The iterator borrowed `numbers` for the whole loop while `push` needed `&mut`. Now each read is a short borrow that copies an `i32`, and the loop stops at the originals. |
+| `transfer` | E0499 | Index directly: `balances[from] -= amount; balances[to] += amount;`. Each `&mut` lasts one statement, so two are never alive at once. `from == to` nets to zero, and a bad index still panics. |
 
 4. `cargo test --features broken broken::` runs only Part A's tests.
 
